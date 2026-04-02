@@ -1,0 +1,408 @@
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { motion } from "framer-motion";
+import { Users, Ticket, Clock, TrendingUp, AlertTriangle, Bell, Search, Timer, Zap, Briefcase, Settings } from "lucide-react";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from "recharts";
+import StatCard from "@/components/StatCard";
+import LiveClock from "@/components/LiveClock";
+import { forecastData, generateTokens, type Token, type IssueCategory } from "@/lib/mockData";
+import { tokensApi, type ServePayload } from "@/lib/api";
+import { useSampleData } from "@/contexts/SampleDataContext";
+
+const CATEGORY_CONFIG = {
+  quick: { label: "Quick", icon: Zap, minutes: 5, color: "bg-accent/15 text-accent border-accent/30", description: "Simple query, ID check, quick info" },
+  standard: { label: "Standard", icon: Briefcase, minutes: 10, color: "bg-primary/15 text-primary border-primary/30", description: "Form filling, document submission" },
+  complex: { label: "Complex", icon: Settings, minutes: 15, color: "bg-warning/15 text-warning border-warning/30", description: "Detailed review, multiple steps" },
+};
+
+const Dashboard = () => {
+  const { sampleDataEnabled } = useSampleData();
+  const [liveCount, setLiveCount] = useState(0);
+  const [tokens, setTokens] = useState<Token[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [forecast, setForecast] = useState<typeof forecastData>([]);
+
+  // Serve modal state — shown when staff clicks "Serve" to categorize the issue
+  const [serveModalTokenId, setServeModalTokenId] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<IssueCategory>("standard");
+  const [customMinutes, setCustomMinutes] = useState(8);
+  const [issueNote, setIssueNote] = useState("");
+
+  useEffect(() => {
+    if (sampleDataEnabled) {
+      setTokens(generateTokens());
+      setLiveCount(23);
+      setForecast(forecastData);
+    } else {
+      setTokens([]);
+      setLiveCount(0);
+      setForecast([]);
+    }
+  }, [sampleDataEnabled]);
+
+  const activeTokens = tokens.filter((t) => t.status !== "completed");
+  const showAlert = liveCount > 20;
+
+  // Calculate estimated wait for each waiting token
+  const waitingTokensWithWait = useMemo(() => {
+    const serving = tokens.filter((t) => t.status === "serving");
+    const waiting = tokens.filter((t) => t.status === "waiting");
+    // Sum remaining time from currently serving tokens (assume half done on average)
+    const servingRemaining = serving.reduce((sum, t) => sum + ((t.estimatedMinutes || 10) / 2), 0);
+    let cumulative = servingRemaining;
+    return waiting.map((t) => {
+      const wait = Math.round(cumulative);
+      // Waiting tokens don't have category yet, use average estimate
+      cumulative += (t.estimatedMinutes || 10);
+      return { ...t, calculatedWait: wait };
+    });
+  }, [tokens]);
+
+  const handleComplete = useCallback(async (id: string) => {
+    // Optimistic update
+    setTokens((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, status: "completed" as const } : t))
+    );
+    if (sampleDataEnabled) {
+      return;
+    }
+    try {
+      await tokensApi.complete(id);
+    } catch (err) {
+      console.warn("[API] Complete failed, using local state:", err);
+    }
+  }, [sampleDataEnabled]);
+
+  const handleServeConfirm = useCallback(async () => {
+    if (!serveModalTokenId) return;
+    const estMinutes = selectedCategory === "custom" ? customMinutes : CATEGORY_CONFIG[selectedCategory as keyof typeof CATEGORY_CONFIG].minutes;
+    const counter = Math.ceil(Math.random() * 5);
+
+    // Optimistic update
+    setTokens((prev) =>
+      prev.map((t) =>
+        t.id === serveModalTokenId
+          ? { ...t, status: "serving" as const, counter, category: selectedCategory, estimatedMinutes: estMinutes, issueDescription: issueNote || undefined }
+          : t
+      )
+    );
+
+    const payload: ServePayload = {
+      category: selectedCategory,
+      estimated_minutes: estMinutes,
+      issue_description: issueNote || undefined,
+      counter,
+    };
+
+    if (sampleDataEnabled) {
+      setServeModalTokenId(null);
+      setSelectedCategory("standard");
+      setCustomMinutes(8);
+      setIssueNote("");
+      return;
+    }
+
+    try {
+      await tokensApi.serve(serveModalTokenId, payload);
+    } catch (err) {
+      console.warn("[API] Serve failed, using local state:", err);
+    }
+
+    setServeModalTokenId(null);
+    setSelectedCategory("standard");
+    setCustomMinutes(8);
+    setIssueNote("");
+  }, [serveModalTokenId, selectedCategory, customMinutes, issueNote, sampleDataEnabled]);
+
+  const filteredTokens = activeTokens.filter(
+    (t) => !searchQuery || t.id.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const tooltipStyle = { background: "hsl(217 33% 14%)", border: "1px solid hsl(217 33% 22%)", borderRadius: "12px", color: "#fff", fontSize: "12px" };
+
+  return (
+    <div className="space-y-6">
+      {showAlert && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-center gap-3 p-4 rounded-xl bg-warning/10 border border-warning/30"
+        >
+          <div className="w-8 h-8 rounded-lg bg-warning/20 flex items-center justify-center">
+            <AlertTriangle className="w-4 h-4 text-warning" />
+          </div>
+          <div className="flex-1">
+            <span className="text-sm font-semibold text-warning">High Congestion Alert</span>
+            <p className="text-xs text-warning/70">{liveCount} people detected in queue area — consider opening additional counters</p>
+          </div>
+          <div className="flex gap-1">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className={`w-1.5 h-6 rounded-full ${i <= Math.ceil(liveCount / 6) ? "bg-warning" : "bg-warning/20"}`} />
+            ))}
+          </div>
+        </motion.div>
+      )}
+
+      <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-xl lg:text-2xl font-bold text-foreground">Staff Dashboard</h1>
+          <LiveClock className="text-sm text-muted-foreground" />
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <Bell className="w-5 h-5 text-muted-foreground" />
+            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-destructive animate-pulse-slow" />
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
+        <StatCard title="Live Count" value={liveCount} subtitle="Auto-refreshing" icon={Users} glowClass="stat-glow-blue" iconColorClass="text-primary" trend={{ value: "12%", positive: true }} />
+        <StatCard title="Active Tokens" value={activeTokens.length} subtitle="Waiting + Serving" icon={Ticket} glowClass="stat-glow-green" iconColorClass="text-accent" />
+        <StatCard title="Avg Wait" value="8m" subtitle="Last hour" icon={Clock} glowClass="stat-glow-yellow" iconColorClass="text-warning" trend={{ value: "2m", positive: false }} />
+        <StatCard title="Peak Hour" value="12 PM" subtitle="AI Forecast" icon={TrendingUp} glowClass="stat-glow-blue" iconColorClass="text-primary" />
+      </div>
+
+      {/* Forecast chart */}
+      <div className="glass-card rounded-xl p-5 lg:p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-base lg:text-lg font-semibold text-foreground">8-Hour Crowd Forecast</h2>
+            <p className="text-xs text-muted-foreground">AI prediction vs actual crowd levels</p>
+          </div>
+          <div className="flex items-center gap-4 text-xs">
+            <div className="flex items-center gap-1.5"><span className="w-3 h-0.5 rounded-full bg-primary" /> Predicted</div>
+            <div className="flex items-center gap-1.5"><span className="w-3 h-0.5 rounded-full bg-accent" /> Actual</div>
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height={240}>
+          <AreaChart data={forecast}>
+            <defs>
+              <linearGradient id="gradBlue" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="hsl(217 91% 60%)" stopOpacity={0.2} />
+                <stop offset="95%" stopColor="hsl(217 91% 60%)" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="hsl(217 33% 20%)" />
+            <XAxis dataKey="hour" stroke="hsl(215 20% 45%)" fontSize={11} tickLine={false} />
+            <YAxis stroke="hsl(215 20% 45%)" fontSize={11} tickLine={false} />
+            <Tooltip contentStyle={tooltipStyle} />
+            <Area type="monotone" dataKey="predicted" stroke="hsl(217 91% 60%)" fill="url(#gradBlue)" strokeWidth={2} />
+            <Line type="monotone" dataKey="actual" stroke="hsl(160 84% 39%)" strokeWidth={2} dot={{ fill: "hsl(160 84% 39%)", r: 4 }} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Token table */}
+      <div className="glass-card rounded-xl p-5 lg:p-6">
+        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 mb-4">
+          <div>
+            <h2 className="text-base lg:text-lg font-semibold text-foreground">Token Queue</h2>
+            <p className="text-xs text-muted-foreground">{activeTokens.length} active — customers join via QR scan</p>
+          </div>
+          <div className="relative w-full lg:w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search tokens..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 rounded-lg bg-secondary border border-border text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+            />
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="text-left py-3 px-3 text-muted-foreground font-medium text-xs uppercase tracking-wider">Token</th>
+                <th className="text-left py-3 px-3 text-muted-foreground font-medium text-xs uppercase tracking-wider hidden sm:table-cell">Joined At</th>
+                <th className="text-left py-3 px-3 text-muted-foreground font-medium text-xs uppercase tracking-wider">Status</th>
+                <th className="text-left py-3 px-3 text-muted-foreground font-medium text-xs uppercase tracking-wider hidden md:table-cell">Category</th>
+                <th className="text-left py-3 px-3 text-muted-foreground font-medium text-xs uppercase tracking-wider hidden md:table-cell">Est. Wait</th>
+                <th className="text-left py-3 px-3 text-muted-foreground font-medium text-xs uppercase tracking-wider hidden lg:table-cell">Counter</th>
+                <th className="text-left py-3 px-3 text-muted-foreground font-medium text-xs uppercase tracking-wider">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredTokens.map((token, i) => {
+                const catConfig = token.category && token.category !== "custom" ? CATEGORY_CONFIG[token.category as keyof typeof CATEGORY_CONFIG] : null;
+                const waitInfo = waitingTokensWithWait.find((w) => w.id === token.id);
+                return (
+                  <motion.tr
+                    key={token.id}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: i * 0.03 }}
+                    className="border-b border-border/30 hover:bg-secondary/50 transition-colors"
+                  >
+                    <td className="py-3 px-3 font-mono font-bold text-foreground">{token.id}</td>
+                    <td className="py-3 px-3 text-muted-foreground hidden sm:table-cell">{token.issuedAt}</td>
+                    <td className="py-3 px-3">
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold ${
+                        token.status === "waiting" ? "bg-warning/15 text-warning" :
+                        token.status === "serving" ? "bg-primary/15 text-primary" :
+                        "bg-accent/15 text-accent"
+                      }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          token.status === "waiting" ? "bg-warning" :
+                          token.status === "serving" ? "bg-primary animate-pulse-slow" :
+                          "bg-accent"
+                        }`} />
+                        {token.status.charAt(0).toUpperCase() + token.status.slice(1)}
+                      </span>
+                    </td>
+                    <td className="py-3 px-3 hidden md:table-cell">
+                      {catConfig ? (
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${catConfig.color}`}>
+                          <catConfig.icon className="w-3 h-3" />
+                          {catConfig.label}
+                        </span>
+                      ) : token.category === "custom" ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border bg-muted/15 text-muted-foreground border-border">
+                          <Timer className="w-3 h-3" />
+                          Custom
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="py-3 px-3 hidden md:table-cell">
+                      {token.status === "waiting" && waitInfo ? (
+                        <span className="font-mono font-semibold text-muted-foreground">~{waitInfo.calculatedWait}m</span>
+                      ) : token.status === "serving" ? (
+                        <span className="font-mono font-semibold text-primary">{token.estimatedMinutes}m</span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="py-3 px-3 text-muted-foreground hidden lg:table-cell">
+                      {token.status === "serving" ? (
+                        <span className="text-primary font-semibold">Counter {token.counter}</span>
+                      ) : "—"}
+                    </td>
+                    <td className="py-3 px-3">
+                      {token.status === "waiting" && (
+                        <button onClick={() => setServeModalTokenId(token.id)} className="px-3 py-1.5 rounded-lg bg-primary/15 text-primary text-xs font-semibold hover:bg-primary/25 transition-colors">
+                          Serve
+                        </button>
+                      )}
+                      {token.status === "serving" && (
+                        <button onClick={() => handleComplete(token.id)} className="px-3 py-1.5 rounded-lg bg-accent/15 text-accent text-xs font-semibold hover:bg-accent/25 transition-colors">
+                          Complete
+                        </button>
+                      )}
+                    </td>
+                  </motion.tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Serve & Categorize Modal */}
+      {serveModalTokenId && (
+        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setServeModalTokenId(null)}>
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="glass-card rounded-2xl p-6 lg:p-8 max-w-md w-full mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-center mb-6">
+              <div className="w-14 h-14 rounded-2xl hero-gradient-bg flex items-center justify-center mx-auto mb-3">
+                <Ticket className="w-7 h-7 text-primary-foreground" />
+              </div>
+              <h3 className="text-lg font-bold text-foreground">Categorize & Serve</h3>
+              <p className="text-sm text-muted-foreground">
+                Token <span className="font-mono font-bold text-foreground">{serveModalTokenId}</span> — what's the issue?
+              </p>
+            </div>
+
+            {/* Category Selection */}
+            <div className="space-y-3 mb-5">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Issue complexity</p>
+              <div className="grid grid-cols-3 gap-2">
+                {(Object.entries(CATEGORY_CONFIG) as [string, typeof CATEGORY_CONFIG.quick][]).map(([key, cfg]) => (
+                  <button
+                    key={key}
+                    onClick={() => setSelectedCategory(key as IssueCategory)}
+                    className={`flex flex-col items-center gap-1.5 p-3 rounded-xl border-2 transition-all duration-200 ${
+                      selectedCategory === key
+                        ? "border-primary bg-primary/10 scale-[1.02]"
+                        : "border-border bg-secondary hover:border-muted-foreground/30"
+                    }`}
+                  >
+                    <cfg.icon className={`w-5 h-5 ${selectedCategory === key ? "text-primary" : "text-muted-foreground"}`} />
+                    <span className={`text-xs font-semibold ${selectedCategory === key ? "text-primary" : "text-foreground"}`}>{cfg.label}</span>
+                    <span className="text-[10px] text-muted-foreground font-mono">{cfg.minutes} min</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* Custom time option */}
+              <button
+                onClick={() => setSelectedCategory("custom")}
+                className={`w-full flex items-center justify-between p-3 rounded-xl border-2 transition-all duration-200 ${
+                  selectedCategory === "custom"
+                    ? "border-primary bg-primary/10"
+                    : "border-border bg-secondary hover:border-muted-foreground/30"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Timer className={`w-4 h-4 ${selectedCategory === "custom" ? "text-primary" : "text-muted-foreground"}`} />
+                  <span className={`text-xs font-semibold ${selectedCategory === "custom" ? "text-primary" : "text-foreground"}`}>Custom Time</span>
+                </div>
+                {selectedCategory === "custom" && (
+                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="number"
+                      min={1}
+                      max={60}
+                      value={customMinutes}
+                      onChange={(e) => setCustomMinutes(Math.max(1, Math.min(60, Number(e.target.value))))}
+                      className="w-14 px-2 py-1 rounded-lg bg-background border border-border text-foreground text-xs font-mono text-center focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    />
+                    <span className="text-[10px] text-muted-foreground">min</span>
+                  </div>
+                )}
+              </button>
+            </div>
+
+            {/* Optional note */}
+            <div className="mb-5">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Note (optional)</p>
+              <input
+                type="text"
+                placeholder="Brief issue description..."
+                value={issueNote}
+                onChange={(e) => setIssueNote(e.target.value)}
+                maxLength={100}
+                className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+            </div>
+
+            {/* Summary */}
+            <div className="bg-secondary/50 rounded-xl p-3 mb-5 flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Estimated service time:</span>
+              <span className="text-sm font-bold text-foreground font-mono">
+                {selectedCategory === "custom" ? customMinutes : CATEGORY_CONFIG[selectedCategory as keyof typeof CATEGORY_CONFIG].minutes} min
+              </span>
+            </div>
+
+            <div className="flex gap-3">
+              <button onClick={() => { setServeModalTokenId(null); setSelectedCategory("standard"); setIssueNote(""); }} className="flex-1 px-4 py-2.5 rounded-xl bg-secondary text-foreground text-sm font-medium hover:bg-secondary/80 transition-colors">
+                Cancel
+              </button>
+              <button onClick={handleServeConfirm} className="flex-1 px-4 py-2.5 rounded-xl hero-gradient-bg text-primary-foreground text-sm font-semibold hover:opacity-90 transition-opacity">
+                Start Serving
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Dashboard;
