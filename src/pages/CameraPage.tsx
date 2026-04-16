@@ -8,10 +8,16 @@ const CameraPage = () => {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [analysisCount, setAnalysisCount] = useState<number | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [autoAnalyzeEnabled, setAutoAnalyzeEnabled] = useState(true);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const analysisTimerRef = useRef<number | null>(null);
 
   const stopCamera = () => {
+    if (analysisTimerRef.current !== null) {
+      window.clearInterval(analysisTimerRef.current);
+      analysisTimerRef.current = null;
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -40,8 +46,12 @@ const CameraPage = () => {
     if (!video || video.readyState < 2) return null;
 
     const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    const originalWidth = video.videoWidth || 640;
+    const originalHeight = video.videoHeight || 480;
+    const maxWidth = 960;
+    const scale = originalWidth > maxWidth ? maxWidth / originalWidth : 1;
+    canvas.width = Math.round(originalWidth * scale);
+    canvas.height = Math.round(originalHeight * scale);
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -52,7 +62,7 @@ const CameraPage = () => {
   };
 
   const captureAndAnalyze = async () => {
-    if (!cameraActive) {
+    if (!cameraActive || isAnalyzing) {
       setCameraError("Start the camera first before analyzing a frame.");
       return;
     }
@@ -67,11 +77,37 @@ const CameraPage = () => {
       setCameraError(null);
     } catch (error) {
       console.error("YOLO analysis failed", error);
-      setCameraError("Unable to analyze the camera frame. Try again.");
+      const message =
+        error instanceof Error ? error.message : "Unable to analyze the camera frame. Try again.";
+      setCameraError(message);
     } finally {
       setIsAnalyzing(false);
     }
   };
+
+  useEffect(() => {
+    if (!cameraActive || !autoAnalyzeEnabled) {
+      if (analysisTimerRef.current !== null) {
+        window.clearInterval(analysisTimerRef.current);
+        analysisTimerRef.current = null;
+      }
+      return;
+    }
+
+    const runAnalysis = () => {
+      void captureAndAnalyze();
+    };
+
+    runAnalysis();
+    analysisTimerRef.current = window.setInterval(runAnalysis, 3000);
+
+    return () => {
+      if (analysisTimerRef.current !== null) {
+        window.clearInterval(analysisTimerRef.current);
+        analysisTimerRef.current = null;
+      }
+    };
+  }, [cameraActive, autoAnalyzeEnabled]);
 
   useEffect(() => {
     return () => {
@@ -135,6 +171,21 @@ const CameraPage = () => {
               className="inline-flex items-center justify-center rounded-xl border border-border bg-background px-4 py-3 text-sm font-semibold text-foreground transition hover:bg-secondary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isAnalyzing ? "Analyzing…" : "Capture & analyze"}
+            </button>
+          </div>
+
+          <div className="mt-4 flex items-center justify-between rounded-xl border border-border/70 bg-background px-4 py-3">
+            <p className="text-sm text-muted-foreground">Auto analyze every 3 seconds</p>
+            <button
+              type="button"
+              onClick={() => setAutoAnalyzeEnabled((prev) => !prev)}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                autoAnalyzeEnabled
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-secondary text-foreground"
+              }`}
+            >
+              {autoAnalyzeEnabled ? "On" : "Off"}
             </button>
           </div>
         </div>
