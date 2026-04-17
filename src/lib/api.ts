@@ -89,8 +89,11 @@ export interface ServePayload {
 
 export const tokensApi = {
   /** Customer self-issues a token via QR scan */
-  issueToken: async (customerName?: string): Promise<TokenResponse> => {
-    const res = await api.post("/tokens/", { customer_name: customerName });
+  issueToken: async (payload?: { customerName?: string; customerPhone?: string }): Promise<TokenResponse> => {
+    const customer_name = [payload?.customerName, payload?.customerPhone]
+      .filter(Boolean)
+      .join(" | ");
+    const res = await api.post("/tokens/", { customer_name: customer_name || undefined });
     return res.data;
   },
 
