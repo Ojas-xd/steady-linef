@@ -74,6 +74,7 @@ const TokenPage = () => {
   };
 
   const config = statusConfig[tokenData.status];
+  const shareTokenUrl = `${window.location.origin}/token?id=${encodeURIComponent(tokenData.id)}`;
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 relative overflow-hidden">
@@ -165,7 +166,7 @@ const TokenPage = () => {
             <div className="flex flex-col items-center pt-2">
               <div className="p-3 bg-foreground rounded-xl">
                 <QRCodeSVG
-                  value={`https://queue.ai/token/${tokenData.id}`}
+                  value={shareTokenUrl}
                   size={100}
                   bgColor="hsl(210 40% 98%)"
                   fgColor="hsl(222 47% 11%)"
