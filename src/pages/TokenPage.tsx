@@ -152,7 +152,7 @@ const TokenPage = () => {
             className="glass-card rounded-2xl overflow-hidden"
           >
             <div className="hero-gradient-bg p-6 text-center">
-              <p className="text-primary-foreground/70 text-xs font-semibold uppercase tracking-widest">Scan Success</p>
+              <p className="text-primary-foreground/70 text-xs font-semibold uppercase tracking-widest">Get Your Token</p>
               <p className="text-3xl font-black text-primary-foreground mt-2">Join Queue</p>
             </div>
             <div className="p-6 space-y-4">
