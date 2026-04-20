@@ -113,22 +113,22 @@ function generateInsights(
   return insights;
 }
 
-const severityStyles = {
-  high: "border-destructive/30 bg-destructive/5",
-  medium: "border-warning/30 bg-warning/5",
-  low: "border-accent/30 bg-accent/5",
-};
-
-const severityIconStyles = {
-  high: "text-destructive bg-destructive/10",
-  medium: "text-warning bg-warning/10",
-  low: "text-accent bg-accent/10",
-};
-
-const severityTagStyles = {
-  high: "bg-destructive/15 text-destructive",
-  medium: "bg-warning/15 text-warning",
-  low: "bg-accent/15 text-accent",
+const severityConfig = {
+  high: {
+    card: "border-destructive/30 bg-destructive/5",
+    icon: "text-destructive bg-destructive/10",
+    tag: "bg-destructive/15 text-destructive",
+  },
+  medium: {
+    card: "border-warning/30 bg-warning/5",
+    icon: "text-warning bg-warning/10",
+    tag: "bg-warning/15 text-warning",
+  },
+  low: {
+    card: "border-accent/30 bg-accent/5",
+    icon: "text-accent bg-accent/10",
+    tag: "bg-accent/15 text-accent",
+  },
 };
 
 const Analytics = () => {
@@ -237,15 +237,15 @@ const Analytics = () => {
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.2 + i * 0.06 }}
-              className={`relative rounded-xl border p-4 transition-all hover:scale-[1.01] ${severityStyles[insight.severity]}`}
+              className={`relative rounded-xl border p-4 transition-all hover:scale-[1.01] ${severityConfig[insight.severity].card}`}
             >
               <div className="flex items-start gap-3">
-                <div className={`p-2 rounded-lg shrink-0 ${severityIconStyles[insight.severity]}`}>
+                <div className={`p-2 rounded-lg shrink-0 ${severityConfig[insight.severity].icon}`}>
                   <insight.icon className="w-4 h-4" />
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    <span className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full ${severityTagStyles[insight.severity]}`}>
+                    <span className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full ${severityConfig[insight.severity].tag}`}>
                       {insight.tag}
                     </span>
                   </div>

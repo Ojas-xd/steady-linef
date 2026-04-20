@@ -49,20 +49,23 @@ export interface AuthResponse {
   user: { id: string; email: string; full_name: string; role: string };
 }
 
+// Helper to store auth token from response
+const storeAuthToken = (response: AuthResponse) => {
+  if (response.access_token) {
+    localStorage.setItem("auth_token", response.access_token);
+  }
+};
+
 export const authApi = {
   login: async (data: LoginPayload): Promise<AuthResponse> => {
     const res = await api.post("/auth/login", data);
-    if (res.data.access_token) {
-      localStorage.setItem("auth_token", res.data.access_token);
-    }
+    storeAuthToken(res.data);
     return res.data;
   },
 
   register: async (data: RegisterPayload): Promise<AuthResponse> => {
     const res = await api.post("/auth/register", data);
-    if (res.data.access_token) {
-      localStorage.setItem("auth_token", res.data.access_token);
-    }
+    storeAuthToken(res.data);
     return res.data;
   },
 
@@ -90,10 +93,10 @@ export interface ServePayload {
 export const tokensApi = {
   /** Customer self-issues a token via QR scan */
   issueToken: async (payload?: { customerName?: string; customerPhone?: string }): Promise<TokenResponse> => {
-    const customer_name = [payload?.customerName, payload?.customerPhone]
-      .filter(Boolean)
-      .join(" | ");
-    const res = await api.post("/tokens/", { customer_name: customer_name || undefined });
+    const res = await api.post("/tokens/", {
+      customer_name: payload?.customerName || undefined,
+      customer_phone: payload?.customerPhone || undefined,
+    });
     return res.data;
   },
 
@@ -258,7 +261,7 @@ export const crowdApi = {
   },
 
   /** Upload a frame for YOLO analysis */
-  analyzeFrame: async (imageFile: File): Promise<{ count: number }> => {
+  analyzeFrame: async (imageFile: File): Promise<{ count: number; image?: string; detections?: Array<{ box: number[]; confidence: number }> }> => {
     const formData = new FormData();
     formData.append("file", imageFile);
     const res = await api.post("/crowd/analyze", formData);

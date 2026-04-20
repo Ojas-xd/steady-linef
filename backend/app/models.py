@@ -42,6 +42,7 @@ class Token(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     token_number = Column(String, unique=True, nullable=False, index=True)
     customer_name = Column(String, nullable=True)
+    customer_phone = Column(String, nullable=True)
     status = Column(SAEnum(TokenStatus), default=TokenStatus.waiting, nullable=False)
     category = Column(SAEnum(IssueCategory), nullable=True)
     estimated_minutes = Column(Integer, nullable=True)

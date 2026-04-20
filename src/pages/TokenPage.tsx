@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Clock, Users, ArrowLeft } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
@@ -18,12 +18,16 @@ const TokenPage = () => {
     id: tokenId ?? "N/A",
     status: "waiting" as "waiting" | "serving" | "completed",
     position: 0,
-    totalAhead: 0,
+    peopleAhead: 0,
     estimatedWait: 0,
     counter: 0,
   });
 
   const hasTokenId = !!tokenId;
+
+  // Notification when status changes to serving
+  const prevStatusRef = useRef<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     if (!tokenId) return;
@@ -34,10 +38,27 @@ const TokenPage = () => {
       tokensApi
         .getQueueStatus(tokenId)
         .then((data) => {
+          // position from backend is 1-indexed (includes user), so peopleAhead = position - 1
+          const peopleAhead = data.status === "waiting" ? Math.max(0, data.position - 1) : 0;
+          
+          // Check if status changed to serving - trigger notification
+          const prevStatus = prevStatusRef.current;
+          if (prevStatus && prevStatus !== "serving" && data.status === "serving") {
+            // Play notification sound
+            if (audioRef.current) {
+              audioRef.current.play().catch(() => {});
+            }
+            // Vibrate on mobile devices
+            if (navigator.vibrate) {
+              navigator.vibrate([200, 100, 200, 100, 400]);
+            }
+          }
+          prevStatusRef.current = data.status;
+          
           setTokenData((prev) => ({
             ...prev,
             position: data.position,
-            totalAhead: Math.max(data.position, prev.totalAhead || data.position),
+            peopleAhead,
             estimatedWait: data.estimated_wait,
             status: data.status as typeof prev.status,
             counter: data.counter || prev.counter,
@@ -50,15 +71,22 @@ const TokenPage = () => {
     };
 
     fetchStatus();
-    const interval = setInterval(fetchStatus, 15000);
+    // Faster refresh when waiting (5s) vs serving/completed (10s)
+    const refreshInterval = tokenData.status === "waiting" ? 5000 : 10000;
+    const interval = setInterval(fetchStatus, refreshInterval);
     return () => clearInterval(interval);
-  }, [tokenId]);
+  }, [tokenId, tokenData.status]);
 
   const progressPercent = useMemo(() => {
     if (tokenData.status !== "waiting") return 100;
-    if (tokenData.totalAhead <= 0) return 0;
-    return ((tokenData.totalAhead - tokenData.position) / tokenData.totalAhead) * 100;
-  }, [tokenData.position, tokenData.status, tokenData.totalAhead]);
+    // When joining, peopleAhead starts at some number and decreases as queue moves
+    // Progress = 100% - (peopleAhead / initialEstimate * 100)
+    // For simplicity, use inverse of peopleAhead relative to initial position
+    if (tokenData.peopleAhead <= 0) return 100;
+    // Estimate: when joined, people ahead was roughly position - 1
+    const initialEstimate = Math.max(tokenData.position, tokenData.peopleAhead + 1);
+    return Math.min(100, Math.max(0, ((initialEstimate - tokenData.peopleAhead) / initialEstimate) * 100));
+  }, [tokenData.position, tokenData.status, tokenData.peopleAhead]);
 
   const statusConfig = {
     waiting: { color: "bg-warning/15 text-warning border-warning/20", dotColor: "bg-warning", label: "Waiting", message: "Please wait, we'll call you soon 🙏", emoji: "⏳" },
@@ -68,6 +96,9 @@ const TokenPage = () => {
 
   const config = statusConfig[tokenData.status];
   const shareTokenUrl = `${window.location.origin}/token?id=${encodeURIComponent(tokenData.id)}`;
+  
+  // Check if just started serving (for visual notification)
+  const justStartedServing = tokenData.status === "serving" && prevStatusRef.current === "serving";
 
   const handleJoinQueue = async (event: FormEvent) => {
     event.preventDefault();
@@ -97,6 +128,13 @@ const TokenPage = () => {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 relative overflow-hidden">
+      {/* Audio for notification */}
+      <audio
+        ref={audioRef}
+        preload="auto"
+        src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZSA0PVanu87plHQUuh9Dz2YU2Bhxqv+zplkcODVGm5O+4ZSAEMYrO89GFNwYdcfH+7JtJDQtPp+XyxWUeBjqS1/LQiTYGH3Dy/+ybSA0MTaLs8blmHwU2kNjyxYU1Bhxw8v7omUgNC1Ko6O/BZSAFNo/R8tSFNwYccPH+75xJDQxPp+zwuGUhBDeP0/LNhjYGHG7w/+ydSA0LUqzs8blnIAU2j9Xy0YU1Bhxvv//CdSU0LVKo7O++ZSAFNo/V8tGFNwYccPD+8J1KDQ1So+zzvmUgBTeP1/LShjYGHG/z/vCc="
+      />
+      
       {/* Background effects */}
       <div className="absolute inset-0 bg-grid-pattern opacity-20" />
       <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[500px] h-[500px] rounded-full bg-primary/5 blur-3xl" />
@@ -172,6 +210,19 @@ const TokenPage = () => {
             </div>
 
             <div className="p-6 space-y-5">
+            {/* Notification Banner - When Serving */}
+              {tokenData.status === "serving" && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="bg-accent/20 border-2 border-accent rounded-xl p-4 text-center animate-pulse-slow"
+                >
+                  <p className="text-2xl mb-1">🎉</p>
+                  <p className="text-lg font-bold text-accent">Your turn is here!</p>
+                  <p className="text-sm text-accent/80">Please proceed to the counter</p>
+                </motion.div>
+              )}
+              
             {/* Status badge */}
               <div className="flex justify-center">
                 <span className={`inline-flex items-center gap-2 px-5 py-2 rounded-full text-sm font-semibold border ${config.color}`}>
@@ -184,7 +235,7 @@ const TokenPage = () => {
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-secondary rounded-xl p-4 text-center">
                   <Users className="w-5 h-5 text-primary mx-auto mb-1.5" />
-                  <p className="text-2xl font-bold text-foreground font-mono">{tokenData.position}</p>
+                  <p className="text-2xl font-bold text-foreground font-mono">{tokenData.peopleAhead}</p>
                   <p className="text-[11px] text-muted-foreground mt-0.5">People Ahead</p>
                 </div>
                 <div className="bg-secondary rounded-xl p-4 text-center">

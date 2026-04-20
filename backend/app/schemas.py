@@ -33,6 +33,7 @@ class AuthResponse(BaseModel):
 
 class TokenIssueRequest(BaseModel):
     customer_name: str | None = None
+    customer_phone: str | None = None
 
 
 class ServeRequest(BaseModel):
@@ -46,6 +47,7 @@ class TokenOut(BaseModel):
     id: str
     token_number: str
     customer_name: str | None
+    customer_phone: str | None
     status: str
     category: str | None
     estimated_minutes: int | None

@@ -7,8 +7,11 @@ const CameraPage = () => {
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [analysisCount, setAnalysisCount] = useState<number | null>(null);
+  const [annotatedImage, setAnnotatedImage] = useState<string | null>(null);
+  const [detections, setDetections] = useState<Array<{ box: number[]; confidence: number }>>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [autoAnalyzeEnabled, setAutoAnalyzeEnabled] = useState(true);
+  const [showAnnotated, setShowAnnotated] = useState(true);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const analysisTimerRef = useRef<number | null>(null);
@@ -74,6 +77,8 @@ const CameraPage = () => {
       const file = new File([blob], "frame.jpg", { type: "image/jpeg" });
       const result = await crowdApi.analyzeFrame(file);
       setAnalysisCount(result.count);
+      setAnnotatedImage(result.image || null);
+      setDetections(result.detections || []);
       setCameraError(null);
     } catch (error) {
       console.error("YOLO analysis failed", error);
@@ -144,9 +149,44 @@ const CameraPage = () => {
             </div>
           </div>
 
+          {/* Toggle between live video and annotated view */}
+          {annotatedImage && (
+            <div className="mb-4 flex items-center justify-between rounded-xl border border-border/70 bg-background px-4 py-3">
+              <p className="text-sm text-muted-foreground">View mode</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAnnotated(false)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                    !showAnnotated ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground"
+                  }`}
+                >
+                  Live Camera
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAnnotated(true)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                    showAnnotated ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground"
+                  }`}
+                >
+                  YOLO Detection
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="rounded-[2rem] overflow-hidden border border-border/70 bg-black/5 mb-4 relative">
-            <video ref={videoRef} className="w-full h-[420px] object-cover bg-black" muted playsInline />
-            {!cameraActive && (
+            {annotatedImage && showAnnotated ? (
+              <img 
+                src={annotatedImage} 
+                alt="YOLO detections" 
+                className="w-full h-[420px] object-contain bg-black"
+              />
+            ) : (
+              <video ref={videoRef} className="w-full h-[420px] object-cover bg-black" muted playsInline />
+            )}
+            {!cameraActive && !annotatedImage && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/40 text-center px-6">
                 <p className="text-base font-semibold text-white">Camera preview will appear here</p>
                 <p className="text-sm text-muted-foreground">Click start to grant browser camera access.</p>
@@ -196,11 +236,40 @@ const CameraPage = () => {
             <h2 className="text-2xl font-bold mt-2">People detected</h2>
           </div>
 
+          {/* Annotated Image Preview */}
+          {annotatedImage && (
+            <div className="rounded-[2rem] border border-border/70 bg-background p-4 mb-4">
+              <p className="text-sm text-muted-foreground uppercase tracking-[0.24em] mb-3 text-center">YOLO Detection View</p>
+              <img 
+                src={annotatedImage} 
+                alt="YOLO detections" 
+                className="w-full h-auto rounded-xl border border-border"
+              />
+            </div>
+          )}
+
           <div className="rounded-[2rem] border border-border/70 bg-background p-6 text-center">
-            <p className="text-sm text-muted-foreground uppercase tracking-[0.24em] mb-3">Last captured frame</p>
+            <p className="text-sm text-muted-foreground uppercase tracking-[0.24em] mb-3">People Count</p>
             <p className="text-6xl font-black text-primary">{analysisCount ?? "--"}</p>
-            <p className="text-sm text-muted-foreground mt-3">The YOLO model counts people from the current camera image.</p>
+            <p className="text-sm text-muted-foreground mt-3">YOLOv8 detected people in the current frame</p>
           </div>
+
+          {/* Detection Details */}
+          {detections.length > 0 && (
+            <div className="mt-4 rounded-[2rem] border border-border/70 bg-background p-4">
+              <p className="text-sm text-muted-foreground uppercase tracking-[0.24em] mb-3">Detection Details</p>
+              <div className="max-h-40 overflow-y-auto space-y-2">
+                {detections.map((det, i) => (
+                  <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-secondary/50">
+                    <span className="text-sm font-medium">Person {i + 1}</span>
+                    <span className="text-xs font-mono bg-primary/10 text-primary px-2 py-1 rounded">
+                      {(det.confidence * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="mt-8 space-y-4 text-sm text-muted-foreground">
             <p>• Use a modern browser with HTTPS or localhost for camera access.</p>

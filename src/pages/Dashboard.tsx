@@ -93,11 +93,15 @@ const Dashboard = () => {
       counter,
     };
 
-    if (sampleDataEnabled) {
+    const resetModal = () => {
       setServeModalTokenId(null);
       setSelectedCategory("standard");
       setCustomMinutes(8);
       setIssueNote("");
+    };
+
+    if (sampleDataEnabled) {
+      resetModal();
       return;
     }
 
@@ -107,10 +111,7 @@ const Dashboard = () => {
       console.warn("[API] Serve failed, using local state:", err);
     }
 
-    setServeModalTokenId(null);
-    setSelectedCategory("standard");
-    setCustomMinutes(8);
-    setIssueNote("");
+    resetModal();
   }, [serveModalTokenId, selectedCategory, customMinutes, issueNote, sampleDataEnabled]);
 
   const filteredTokens = activeTokens.filter(

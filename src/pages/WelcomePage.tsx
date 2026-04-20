@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
-import { LayoutDashboard, Ticket, Monitor, BarChart3, Zap, ArrowRight, Users, Clock, Shield } from "lucide-react";
+import { LayoutDashboard, Ticket, Monitor, BarChart3, Zap, ArrowRight, Users, Clock, Shield, Scan } from "lucide-react";
 
 const features = [
   {
@@ -8,6 +8,15 @@ const features = [
     title: "Staff Dashboard",
     description: "Real-time crowd monitoring, token management, and AI-powered forecasting.",
     to: "/dashboard",
+    color: "text-primary",
+    bgColor: "bg-primary/10",
+    borderColor: "border-primary/20",
+  },
+  {
+    icon: Scan,
+    title: "QR Scan Entry",
+    description: "Display QR code for customers to scan and join queue instantly.",
+    to: "/qr",
     color: "text-primary",
     bgColor: "bg-primary/10",
     borderColor: "border-primary/20",
@@ -130,7 +139,7 @@ const WelcomePage = () => {
 
         {/* Feature cards */}
         <section className="px-6 lg:px-16 pb-24 max-w-6xl mx-auto">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {features.map((feature, i) => (
               <motion.div
                 key={feature.to}

@@ -15,6 +15,7 @@ import TokenPage from "@/pages/TokenPage";
 import DisplayPage from "@/pages/DisplayPage";
 import CameraPage from "@/pages/CameraPage";
 import Analytics from "@/pages/Analytics";
+import QRScanPage from "@/pages/QRScanPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -44,6 +45,7 @@ const App = () => (
               } />
             </Route>
             <Route path="/token" element={<TokenPage />} />
+            <Route path="/qr" element={<QRScanPage />} />
             <Route path="/display" element={<DisplayPage />} />
             <Route path="/camera" element={<CameraPage />} />
             <Route path="*" element={<NotFound />} />

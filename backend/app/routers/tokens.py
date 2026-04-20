@@ -24,6 +24,7 @@ def issue_token(body: TokenIssueRequest, db: Session = Depends(get_db)):
     token = Token(
         token_number=_next_token_number(db),
         customer_name=body.customer_name,
+        customer_phone=body.customer_phone,
         status=TokenStatus.waiting,
     )
     db.add(token)
