@@ -16,6 +16,7 @@ class TokenStatus(str, enum.Enum):
     waiting = "waiting"
     serving = "serving"
     completed = "completed"
+    cancelled = "cancelled"
 
 
 class IssueCategory(str, enum.Enum):

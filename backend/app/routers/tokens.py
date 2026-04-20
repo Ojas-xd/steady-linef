@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -79,13 +79,50 @@ def complete_token(token_id: str, db: Session = Depends(get_db)):
     return token
 
 
+@router.patch("/{token_id}/cancel", response_model=TokenOut)
+def cancel_token(token_id: str, db: Session = Depends(get_db)):
+    """Customer cancels their token (leaves queue)."""
+    token = db.query(Token).filter((Token.id == token_id) | (Token.token_number == token_id)).first()
+    if not token:
+        raise HTTPException(status_code=404, detail="Token not found")
+    
+    if token.status not in [TokenStatus.waiting, TokenStatus.serving]:
+        raise HTTPException(status_code=400, detail="Token cannot be cancelled")
+    
+    token.status = TokenStatus.cancelled
+    token.completed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(token)
+    return token
+
+
+def _expire_old_tokens(db: Session):
+    """Auto-cancel tokens waiting for more than 30 minutes."""
+    cutoff = datetime.utcnow() - timedelta(minutes=30)
+    old_tokens = db.query(Token).filter(
+        Token.status == TokenStatus.waiting,
+        Token.issued_at < cutoff,
+    ).all()
+    
+    for token in old_tokens:
+        token.status = TokenStatus.cancelled
+        token.completed_at = datetime.utcnow()
+    
+    if old_tokens:
+        db.commit()
+    return len(old_tokens)
+
+
 @router.get("/{token_id}/status", response_model=QueueStatusOut)
 def get_queue_status(token_id: str, db: Session = Depends(get_db)):
     token = db.query(Token).filter((Token.id == token_id) | (Token.token_number == token_id)).first()
     if not token:
         raise HTTPException(status_code=404, detail="Token not found")
 
-    # Count how many waiting tokens are ahead
+    # Auto-expire old waiting tokens
+    _expire_old_tokens(db)
+
+    # Count how many waiting tokens are ahead (excluding cancelled)
     ahead = db.query(Token).filter(
         Token.status == TokenStatus.waiting,
         Token.issued_at < token.issued_at,

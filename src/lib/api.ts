@@ -149,6 +149,12 @@ export const tokensApi = {
       { position: 5, estimated_wait: 12, status: "waiting" }
     );
   },
+
+  /** Customer cancels their token (leaves queue) */
+  cancel: async (tokenId: string): Promise<TokenResponse> => {
+    const res = await api.patch(`/tokens/${tokenId}/cancel`);
+    return res.data;
+  },
 };
 
 // ── Dashboard / Stats ─────────────────────────────────

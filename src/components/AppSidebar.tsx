@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Ticket, Monitor, BarChart3, Camera, Zap, Menu, X, Bell, LogOut } from "lucide-react";
+import { LayoutDashboard, ScanLine, Monitor, BarChart3, Camera, Zap, Menu, X, Bell, LogOut } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/contexts/AuthContext";
 
 const links = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
-  { to: "/token", icon: Ticket, label: "Token" },
+  { to: "/qr", icon: ScanLine, label: "QR Scan" },
   { to: "/display", icon: Monitor, label: "Display" },
   { to: "/camera", icon: Camera, label: "Camera" },
   { to: "/analytics", icon: BarChart3, label: "Analytics" },

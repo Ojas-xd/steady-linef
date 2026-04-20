@@ -16,12 +16,13 @@ const TokenPage = () => {
 
   const [tokenData, setTokenData] = useState({
     id: tokenId ?? "N/A",
-    status: "waiting" as "waiting" | "serving" | "completed",
+    status: "waiting" as "waiting" | "serving" | "completed" | "cancelled",
     position: 0,
     peopleAhead: 0,
     estimatedWait: 0,
     counter: 0,
   });
+  const [isCancelling, setIsCancelling] = useState(false);
 
   const hasTokenId = !!tokenId;
 
@@ -92,6 +93,7 @@ const TokenPage = () => {
     waiting: { color: "bg-warning/15 text-warning border-warning/20", dotColor: "bg-warning", label: "Waiting", message: "Please wait, we'll call you soon 🙏", emoji: "⏳" },
     serving: { color: "bg-primary/15 text-primary border-primary/20", dotColor: "bg-primary animate-pulse-slow", label: "Now Serving", message: "Your turn is coming up! 🎉", emoji: "🔔" },
     completed: { color: "bg-accent/15 text-accent border-accent/20", dotColor: "bg-accent", label: "Completed", message: "Please proceed to Counter " + tokenData.counter + " ✅", emoji: "✅" },
+    cancelled: { color: "bg-destructive/15 text-destructive border-destructive/20", dotColor: "bg-destructive", label: "Cancelled", message: "You have left the queue", emoji: "❌" },
   };
 
   const config = statusConfig[tokenData.status];
@@ -123,6 +125,21 @@ const TokenPage = () => {
       setFormError("Unable to join queue right now. Please try again.");
     } finally {
       setIsIssuingToken(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!tokenId) return;
+    if (!window.confirm("Are you sure you want to leave the queue?")) return;
+
+    setIsCancelling(true);
+    try {
+      await tokensApi.cancel(tokenId);
+      setTokenData((prev) => ({ ...prev, status: "cancelled" }));
+    } catch {
+      setFormError("Unable to cancel. Please try again.");
+    } finally {
+      setIsCancelling(false);
     }
   };
 
@@ -292,6 +309,18 @@ const TokenPage = () => {
                 </div>
                 <p className="text-[11px] text-muted-foreground mt-2">Scan to share your token link</p>
               </div>
+
+            {/* Cancel Button - Only when waiting */}
+              {tokenData.status === "waiting" && (
+                <button
+                  type="button"
+                  onClick={handleCancel}
+                  disabled={isCancelling}
+                  className="w-full rounded-xl border-2 border-destructive/30 bg-destructive/10 px-4 py-3 text-sm font-semibold text-destructive transition hover:bg-destructive/20 disabled:opacity-50"
+                >
+                  {isCancelling ? "Cancelling..." : "Leave Queue"}
+                </button>
+              )}
             </div>
           </motion.div>
         )}

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { motion } from "framer-motion";
 import { Users, Ticket, Clock, TrendingUp, AlertTriangle, Bell, Search, Timer, Zap, Briefcase, Settings } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from "recharts";
+import { QRCodeSVG } from "qrcode.react";
 import StatCard from "@/components/StatCard";
 import LiveClock from "@/components/LiveClock";
 import { forecastData, generateTokens, type Token, type IssueCategory } from "@/lib/mockData";
@@ -162,6 +163,29 @@ const Dashboard = () => {
         <StatCard title="Avg Wait" value="8m" subtitle="Last hour" icon={Clock} glowClass="stat-glow-yellow" iconColorClass="text-warning" trend={{ value: "2m", positive: false }} />
         <StatCard title="Peak Hour" value="12 PM" subtitle="AI Forecast" icon={TrendingUp} glowClass="stat-glow-blue" iconColorClass="text-primary" />
       </div>
+
+      {/* QR Code for Customers */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="glass-card rounded-xl p-5 border border-primary/20"
+      >
+        <div className="flex flex-col sm:flex-row items-center gap-4">
+          <div className="bg-white p-3 rounded-xl shrink-0">
+            <QRCodeSVG
+              value={`${window.location.origin}/token`}
+              size={80}
+              bgColor="#ffffff"
+              fgColor="#000000"
+            />
+          </div>
+          <div className="text-center sm:text-left">
+            <h3 className="text-base font-semibold text-foreground">Customer QR Check-in</h3>
+            <p className="text-sm text-muted-foreground mt-1">Customers scan this QR code to join the queue</p>
+            <p className="text-xs text-primary mt-2">Or click "QR Scan" in sidebar for fullscreen view</p>
+          </div>
+        </div>
+      </motion.div>
 
       {/* Forecast chart */}
       <div className="glass-card rounded-xl p-5 lg:p-6">
