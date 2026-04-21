@@ -6,7 +6,7 @@ import { QRCodeSVG } from "qrcode.react";
 import StatCard from "@/components/StatCard";
 import LiveClock from "@/components/LiveClock";
 import { forecastData, generateTokens, type Token, type IssueCategory } from "@/lib/mockData";
-import { tokensApi, type ServePayload } from "@/lib/api";
+import { tokensApi, crowdApi, type ServePayload } from "@/lib/api";
 import { useSampleData } from "@/contexts/SampleDataContext";
 
 const CATEGORY_CONFIG = {
@@ -28,19 +28,35 @@ const Dashboard = () => {
   const [customMinutes, setCustomMinutes] = useState(8);
   const [issueNote, setIssueNote] = useState("");
 
+  // Fetch tokens from API when not using sample data
   useEffect(() => {
     if (sampleDataEnabled) {
       setTokens(generateTokens());
       setLiveCount(23);
       setForecast(forecastData);
-    } else {
-      setTokens([]);
-      setLiveCount(0);
-      setForecast([]);
+      return;
     }
+
+    // Fetch real data from backend
+    const fetchData = async () => {
+      try {
+        const [tokensData, statsData] = await Promise.all([
+          tokensApi.getAll(),
+          crowdApi.getLiveCount().catch(() => ({ count: 0 })),
+        ]);
+        setTokens(tokensData);
+        setLiveCount(statsData.count || 0);
+      } catch (err) {
+        console.warn("[Dashboard] Failed to fetch data:", err);
+      }
+    };
+
+    fetchData();
+    const interval = setInterval(fetchData, 5000); // Refresh every 5 seconds
+    return () => clearInterval(interval);
   }, [sampleDataEnabled]);
 
-  const activeTokens = tokens.filter((t) => t.status !== "completed");
+  const activeTokens = tokens.filter((t) => t.status !== "completed" && t.status !== "cancelled");
   const showAlert = liveCount > 20;
 
   // Calculate estimated wait for each waiting token

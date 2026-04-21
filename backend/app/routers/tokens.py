@@ -35,7 +35,8 @@ def issue_token(body: TokenIssueRequest, db: Session = Depends(get_db)):
 
 @router.get("/", response_model=list[TokenOut])
 def get_all_tokens(db: Session = Depends(get_db)):
-    return db.query(Token).order_by(Token.issued_at.desc()).all()
+    # Exclude cancelled tokens from staff view
+    return db.query(Token).filter(Token.status != TokenStatus.cancelled).order_by(Token.issued_at.desc()).all()
 
 
 @router.get("/{token_id}", response_model=TokenOut)

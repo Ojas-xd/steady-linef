@@ -1,8 +1,9 @@
 import io
 import base64
+import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, UploadFile, File
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session
 from PIL import Image
 import numpy as np
@@ -12,17 +13,27 @@ from app.database import get_db
 from app.models import CrowdCount
 
 router = APIRouter(prefix="/crowd", tags=["Crowd"])
+logger = logging.getLogger(__name__)
 
 # Lazy-load YOLO model
 _model = None
+_model_error = None
 
 
 def _get_model():
-    global _model
-    if _model is None:
-        from ultralytics import YOLO
-        from app.config import settings
-        _model = YOLO(settings.YOLO_MODEL_PATH)
+    global _model, _model_error
+    if _model is None and _model_error is None:
+        try:
+            from ultralytics import YOLO
+            from app.config import settings
+            logger.info(f"Loading YOLO model from: {settings.YOLO_MODEL_PATH}")
+            _model = YOLO(settings.YOLO_MODEL_PATH)
+            logger.info("YOLO model loaded successfully")
+        except Exception as e:
+            _model_error = str(e)
+            logger.error(f"Failed to load YOLO model: {e}")
+    if _model_error:
+        raise HTTPException(status_code=503, detail=f"YOLO model not available: {_model_error}")
     return _model
 
 
@@ -38,9 +49,13 @@ def get_live_count(db: Session = Depends(get_db)):
 @router.post("/analyze")
 async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Upload an image frame → YOLO detects people → returns count + annotated image."""
-    contents = await file.read()
-    image = Image.open(io.BytesIO(contents))
-    frame = np.array(image)
+    try:
+        contents = await file.read()
+        image = Image.open(io.BytesIO(contents))
+        frame = np.array(image)
+    except Exception as e:
+        logger.error(f"Failed to process uploaded image: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid image file: {str(e)}")
     
     # Convert RGB to BGR for OpenCV if needed
     if len(frame.shape) == 3 and frame.shape[2] == 3:
@@ -48,8 +63,14 @@ async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_
     else:
         frame_bgr = frame
 
-    model = _get_model()
-    results = model(frame, verbose=False)
+    try:
+        model = _get_model()
+        results = model(frame, verbose=False)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"YOLO inference failed: {e}")
+        raise HTTPException(status_code=500, detail=f"YOLO analysis failed: {str(e)}")
 
     # Class 0 = person in COCO
     count = 0
