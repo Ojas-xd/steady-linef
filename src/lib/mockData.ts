@@ -2,14 +2,17 @@ export type IssueCategory = "quick" | "standard" | "complex" | "custom";
 
 export interface Token {
   id: string;
+  tokenNumber?: string;
   issuedAt: string;
-  status: "waiting" | "serving" | "completed";
+  status: "waiting" | "serving" | "completed" | "cancelled";
   completedAt?: string;
   serviceTime?: number;
   counter?: number;
   category?: IssueCategory;
   estimatedMinutes?: number;
   issueDescription?: string;
+  customerName?: string;
+  customerPhone?: string;
 }
 
 export const generateTokens = (): Token[] => {

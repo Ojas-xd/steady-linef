@@ -26,9 +26,23 @@ def _get_model():
         try:
             from ultralytics import YOLO
             from app.config import settings
+            import os
+            
             logger.info(f"Loading YOLO model from: {settings.YOLO_MODEL_PATH}")
+            
+            # Check if model file exists
+            if not os.path.exists(settings.YOLO_MODEL_PATH):
+                logger.warning(f"Model file not found at {settings.YOLO_MODEL_PATH}, downloading...")
+            
+            # Load model - will auto-download if not present
             _model = YOLO(settings.YOLO_MODEL_PATH)
-            logger.info("YOLO model loaded successfully")
+            
+            # Warm up model with dummy inference
+            import numpy as np
+            dummy = np.zeros((640, 480, 3), dtype=np.uint8)
+            _model.predict(dummy, verbose=False, conf=0.25)
+            
+            logger.info(f"YOLO model loaded successfully. Classes: {len(_model.names)}")
         except Exception as e:
             _model_error = str(e)
             logger.error(f"Failed to load YOLO model: {e}")
@@ -71,7 +85,16 @@ async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_
 
     try:
         model = _get_model()
-        results = model(frame, verbose=False)
+        # Use predict with explicit confidence threshold and classes (0 = person)
+        results = model.predict(
+            frame, 
+            verbose=False, 
+            conf=0.25,  # Confidence threshold 25%
+            iou=0.45,   # NMS IoU threshold
+            classes=[0],  # Only detect class 0 (person)
+            device='cpu'  # Force CPU to avoid GPU issues
+        )
+        logger.info(f"YOLO inference completed, processing {len(results)} result(s)")
     except HTTPException:
         raise
     except Exception as e:
@@ -83,26 +106,32 @@ async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_
     detections = []
     
     for r in results:
+        logger.debug(f"Result boxes: {len(r.boxes)}")
         for box in r.boxes:
-            if int(box.cls[0]) == 0:  # Person class
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            
+            # Only count person class (0) with confidence >= 0.25
+            if cls_id == 0 and conf >= 0.25:
                 count += 1
                 # Get box coordinates
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
-                confidence = float(box.conf[0])
                 
                 detections.append({
                     "box": [x1, y1, x2, y2],
-                    "confidence": round(confidence, 2)
+                    "confidence": round(conf, 2)
                 })
                 
                 # Draw bounding box (green)
                 cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 
                 # Draw label with confidence
-                label = f"Person {confidence:.2f}"
+                label = f"Person {conf:.2f}"
                 label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
                 cv2.rectangle(frame_bgr, (x1, y1 - label_size[1] - 10), (x1 + label_size[0], y1), (0, 255, 0), -1)
                 cv2.putText(frame_bgr, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+    
+    logger.info(f"Detection complete: {count} person(s) found with {len(detections)} detection record(s)")
 
     # Convert back to RGB for output
     frame_annotated = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)

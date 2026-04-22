@@ -329,7 +329,7 @@ const Analytics = () => {
                   transition={{ delay: i * 0.03 }}
                   className="border-b border-border/30 hover:bg-secondary/50 transition-colors"
                 >
-                  <td className="py-3 px-3 font-mono font-bold text-foreground">{token.id}</td>
+                  <td className="py-3 px-3 font-mono font-bold text-foreground">#{token.tokenNumber || token.id.slice(0,8)}</td>
                   <td className="py-3 px-3 text-muted-foreground">{token.issuedAt}</td>
                   <td className="py-3 px-3 text-muted-foreground hidden sm:table-cell">{token.completedAt}</td>
                   <td className="py-3 px-3">
