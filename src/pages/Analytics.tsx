@@ -7,6 +7,13 @@ import LiveClock from "@/components/LiveClock";
 import { generateTokens, hourlyDistribution, weeklyTrend, type Token } from "@/lib/mockData";
 import { useSampleData } from "@/contexts/SampleDataContext";
 
+// Helper to format token number for display (e.g., "0423-5" → "5")
+const formatTokenDisplay = (tokenNumber: string | undefined): string => {
+  if (!tokenNumber) return "";
+  const parts = tokenNumber.split('-');
+  return parts.length === 2 ? parts[1] : tokenNumber;
+};
+
 interface Insight {
   icon: React.ElementType;
   title: string;
@@ -329,7 +336,7 @@ const Analytics = () => {
                   transition={{ delay: i * 0.03 }}
                   className="border-b border-border/30 hover:bg-secondary/50 transition-colors"
                 >
-                  <td className="py-3 px-3 font-mono font-bold text-foreground">#{token.tokenNumber || token.id.slice(0,8)}</td>
+                  <td className="py-3 px-3 font-mono font-bold text-foreground">#{formatTokenDisplay(token.tokenNumber) || token.id.slice(0,8)}</td>
                   <td className="py-3 px-3 text-muted-foreground">{token.issuedAt}</td>
                   <td className="py-3 px-3 text-muted-foreground hidden sm:table-cell">{token.completedAt}</td>
                   <td className="py-3 px-3">

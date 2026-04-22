@@ -5,6 +5,13 @@ import { QRCodeSVG } from "qrcode.react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { tokensApi } from "@/lib/api";
 
+// Helper to format token number for display (e.g., "0423-5" → "5")
+const formatTokenDisplay = (tokenNumber: string): string => {
+  if (!tokenNumber) return "";
+  const parts = tokenNumber.split('-');
+  return parts.length === 2 ? parts[1] : tokenNumber;
+};
+
 const TokenPage = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -277,7 +284,7 @@ const TokenPage = () => {
                 animate={{ scale: 1 }}
                 className="text-6xl font-black text-primary-foreground mt-2 font-mono"
               >
-                #{tokenData.tokenNumber || tokenData.id.slice(0, 8)}
+                #{formatTokenDisplay(tokenData.tokenNumber) || tokenData.id.slice(0, 8)}
               </motion.p>
             </div>
 

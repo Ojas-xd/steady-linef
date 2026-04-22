@@ -9,6 +9,13 @@ import { forecastData, generateTokens, type Token, type IssueCategory } from "@/
 import { tokensApi, crowdApi, type ServePayload } from "@/lib/api";
 import { useSampleData } from "@/contexts/SampleDataContext";
 
+// Helper to format token number for display (e.g., "0423-5" → "5")
+const formatTokenDisplay = (tokenNumber: string | undefined): string => {
+  if (!tokenNumber) return "";
+  const parts = tokenNumber.split('-');
+  return parts.length === 2 ? parts[1] : tokenNumber;
+};
+
 const CATEGORY_CONFIG = {
   quick: { label: "Quick", icon: Zap, minutes: 5, color: "bg-accent/15 text-accent border-accent/30", description: "Simple query, ID check, quick info" },
   standard: { label: "Standard", icon: Briefcase, minutes: 10, color: "bg-primary/15 text-primary border-primary/30", description: "Form filling, document submission" },
@@ -311,7 +318,7 @@ const Dashboard = () => {
                     transition={{ delay: i * 0.03 }}
                     className="border-b border-border/30 hover:bg-secondary/50 transition-colors"
                   >
-                    <td className="py-3 px-3 font-mono font-bold text-foreground">#{token.tokenNumber || token.id.slice(0,8)}</td>
+                    <td className="py-3 px-3 font-mono font-bold text-foreground">#{formatTokenDisplay(token.tokenNumber) || token.id.slice(0,8)}</td>
                     <td className="py-3 px-3 text-muted-foreground hidden sm:table-cell">{token.issuedAt}</td>
                     <td className="py-3 px-3">
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold ${

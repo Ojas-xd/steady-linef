@@ -11,26 +11,27 @@ router = APIRouter(prefix="/tokens", tags=["Tokens"])
 
 
 def _next_token_number(db: Session) -> str:
-    """Generate simple sequential token numbers (1, 2, 3...) based on active tokens today."""
+    """Generate daily token numbers (e.g., 0423-1, 0423-2 for April 23) to avoid unique constraint issues."""
     from sqlalchemy import func
     
-    # Only count tokens from today (active queue for the day)
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today = datetime.utcnow()
+    date_prefix = today.strftime("%m%d")  # e.g., "0423" for April 23
     
-    # Get max token number from today's active tokens (waiting or serving)
+    # Find the highest token number for today (format: MMDD-N)
+    pattern = f"{date_prefix}-%"
     result = db.query(func.max(Token.token_number)).filter(
-        Token.token_number.regexp_match('^\\d+$'),
-        Token.issued_at >= today_start,
-        Token.status.in_([TokenStatus.waiting, TokenStatus.serving])
+        Token.token_number.like(pattern)
     ).scalar()
     
     if not result:
-        return "1"
+        return f"{date_prefix}-1"
+    
     try:
-        next_num = int(result) + 1
-        return str(next_num)
-    except (ValueError, TypeError):
-        return "1"
+        # Extract the number after the dash
+        current_num = int(result.split('-')[1])
+        return f"{date_prefix}-{current_num + 1}"
+    except (ValueError, TypeError, IndexError):
+        return f"{date_prefix}-1"
 
 
 @router.post("/", response_model=TokenOut)
