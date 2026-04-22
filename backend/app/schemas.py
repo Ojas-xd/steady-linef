@@ -109,3 +109,16 @@ class AnalyticsOut(BaseModel):
     hourly_distribution: list[HourlyItem]
     weekly_trend: list[WeeklyItem]
     completed_tokens: list[TokenOut]
+
+
+# ── Crowd Detection ────────────────────────────────────
+
+class DetectionBox(BaseModel):
+    box: list[int]  # [x1, y1, x2, y2]
+    confidence: float
+
+
+class CrowdAnalyzeOut(BaseModel):
+    count: int
+    image: str  # base64 encoded image
+    detections: list[DetectionBox]

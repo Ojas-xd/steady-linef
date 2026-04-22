@@ -11,6 +11,7 @@ import cv2
 
 from app.database import get_db
 from app.models import CrowdCount
+from app.schemas import CrowdAnalyzeOut
 
 router = APIRouter(prefix="/crowd", tags=["Crowd"])
 logger = logging.getLogger(__name__)
@@ -66,13 +67,30 @@ def get_live_count(db: Session = Depends(get_db)):
     }
 
 
-@router.post("/analyze")
+@router.post("/analyze", response_model=CrowdAnalyzeOut)
 async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Upload an image frame → YOLO detects people → returns count + annotated image."""
     try:
         contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Empty file uploaded")
+        
         image = Image.open(io.BytesIO(contents))
+        
+        # Convert to RGB if necessary
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
         frame = np.array(image)
+        
+        # Validate frame dimensions
+        if len(frame.shape) != 3 or frame.shape[2] != 3:
+            raise HTTPException(status_code=400, detail=f"Invalid image dimensions: {frame.shape}")
+            
+        logger.info(f"Processing image: shape={frame.shape}, size={len(contents)} bytes")
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to process uploaded image: {e}")
         raise HTTPException(status_code=400, detail=f"Invalid image file: {str(e)}")
