@@ -52,6 +52,24 @@ def _get_model():
     return _model
 
 
+@router.get("/health")
+def crowd_health_check():
+    """Health check endpoint for YOLO model status"""
+    try:
+        model = _get_model()
+        return {
+            "status": "healthy",
+            "model_loaded": True,
+            "model_classes": list(model.names.values()) if hasattr(model, 'names') else [],
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "model_loaded": False,
+            "error": str(_model_error or e),
+        }
+
+
 @router.get("/count")
 def get_live_count(db: Session = Depends(get_db)):
     """Get latest crowd count, but only if it's recent (within last 5 minutes)"""

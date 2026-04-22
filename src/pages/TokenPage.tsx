@@ -30,6 +30,17 @@ const TokenPage = () => {
   // Notification when status changes to serving
   const prevStatusRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
+  
+  // Request notification permission on load
+  useEffect(() => {
+    if ("Notification" in window) {
+      Notification.requestPermission().then(permission => {
+        setNotificationPermission(permission);
+        console.log("[TokenPage] Notification permission:", permission);
+      });
+    }
+  }, []);
 
   useEffect(() => {
     if (!tokenId) return;
@@ -57,6 +68,14 @@ const TokenPage = () => {
           // Vibrate on mobile devices
           if (navigator.vibrate) {
             navigator.vibrate([200, 100, 200, 100, 400]);
+          }
+          // Show browser notification
+          if ("Notification" in window && Notification.permission === "granted") {
+            new Notification("🎉 Your turn is here!", {
+              body: `Token #${tokenData?.token_number || tokenId} - Please proceed to the counter`,
+              icon: "/favicon.ico",
+              requireInteraction: true,
+            });
           }
         }
         prevStatusRef.current = statusData.status;
