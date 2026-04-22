@@ -83,6 +83,10 @@ export interface TokenResponse extends Token {
   customer_name?: string;
   customer_phone?: string;
   token_number?: string;
+  service_time?: number;  // Actual time taken
+  completed_at?: string;  // ISO timestamp
+  served_at?: string;
+  counter?: number;
 }
 
 export interface ServePayload {
@@ -155,6 +159,15 @@ export const tokensApi = {
   /** Customer cancels their token (leaves queue) */
   cancel: async (tokenId: string): Promise<TokenResponse> => {
     const res = await api.patch(`/tokens/${tokenId}/cancel`);
+    return res.data;
+  },
+
+  /** Update service time for already-serving token (staff asks customer after calling) */
+  updateTime: async (tokenId: string, estimatedMinutes: number, issueDescription?: string): Promise<TokenResponse> => {
+    const res = await api.patch(`/tokens/${tokenId}/update-time`, {
+      estimated_minutes: estimatedMinutes,
+      issue_description: issueDescription,
+    });
     return res.data;
   },
 };

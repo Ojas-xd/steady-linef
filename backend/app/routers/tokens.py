@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Token, TokenStatus, IssueCategory
-from app.schemas import TokenIssueRequest, ServeRequest, TokenOut, QueueStatusOut
+from app.schemas import TokenIssueRequest, ServeRequest, TokenOut, QueueStatusOut, UpdateTimeRequest
 
 router = APIRouter(prefix="/tokens", tags=["Tokens"])
 
@@ -73,16 +73,34 @@ def serve_token(token_id: str, body: ServeRequest, db: Session = Depends(get_db)
 
 @router.patch("/{token_id}/complete", response_model=TokenOut)
 def complete_token(token_id: str, db: Session = Depends(get_db)):
+    """Mark current token complete and auto-call next waiting customer."""
     token = db.query(Token).filter((Token.id == token_id) | (Token.token_number == token_id)).first()
     if not token:
         raise HTTPException(status_code=404, detail="Token not found")
 
+    # Mark current as complete
     token.status = TokenStatus.completed
     token.completed_at = datetime.utcnow()
     if token.served_at:
         token.service_time = (token.completed_at - token.served_at).total_seconds() / 60.0
+    
     db.commit()
     db.refresh(token)
+    
+    # Auto-serve the next waiting customer (oldest issued)
+    next_token = db.query(Token).filter(
+        Token.status == TokenStatus.waiting
+    ).order_by(Token.issued_at.asc()).first()
+    
+    if next_token:
+        next_token.status = TokenStatus.serving
+        next_token.served_at = datetime.utcnow()
+        next_token.counter = token.counter or 1  # Use same counter
+        next_token.estimated_minutes = 10  # Default 10 min, staff can update
+        db.commit()
+        db.refresh(next_token)
+        print(f"[Queue] Auto-called next customer: {next_token.token_number} at Counter {next_token.counter}")
+    
     return token
 
 
@@ -145,3 +163,22 @@ def get_queue_status(token_id: str, db: Session = Depends(get_db)):
         status=token.status.value,
         counter=token.counter,
     )
+
+
+@router.patch("/{token_id}/update-time", response_model=TokenOut)
+def update_service_time(token_id: str, body: UpdateTimeRequest, db: Session = Depends(get_db)):
+    """Update estimated time for a serving token (staff asks customer after calling them)."""
+    token = db.query(Token).filter((Token.id == token_id) | (Token.token_number == token_id)).first()
+    if not token:
+        raise HTTPException(status_code=404, detail="Token not found")
+    
+    if token.status != TokenStatus.serving:
+        raise HTTPException(status_code=400, detail="Can only update time for serving tokens")
+    
+    token.estimated_minutes = body.estimated_minutes
+    if body.issue_description:
+        token.issue_description = body.issue_description
+    
+    db.commit()
+    db.refresh(token)
+    return token

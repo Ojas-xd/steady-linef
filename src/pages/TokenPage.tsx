@@ -22,6 +22,8 @@ const TokenPage = () => {
     peopleAhead: 0,
     estimatedWait: 0,
     counter: 0,
+    serviceTime: 0,  // Actual time taken to complete service
+    completedAt: "",  // When service was completed
   });
   const [isCancelling, setIsCancelling] = useState(false);
 
@@ -88,6 +90,8 @@ const TokenPage = () => {
           estimatedWait: statusData.estimated_wait,
           status: statusData.status as typeof prev.status,
           counter: statusData.counter || prev.counter,
+          serviceTime: tokenData?.service_time || prev.serviceTime,
+          completedAt: tokenData?.completed_at || prev.completedAt,
         }));
         setFormError(null);
       } catch {
@@ -116,7 +120,7 @@ const TokenPage = () => {
   const statusConfig = {
     waiting: { color: "bg-warning/15 text-warning border-warning/20", dotColor: "bg-warning", label: "Waiting", message: "Please wait, we'll call you soon 🙏", emoji: "⏳" },
     serving: { color: "bg-primary/15 text-primary border-primary/20", dotColor: "bg-primary animate-pulse-slow", label: "Now Serving", message: "Your turn is coming up! 🎉", emoji: "🔔" },
-    completed: { color: "bg-accent/15 text-accent border-accent/20", dotColor: "bg-accent", label: "Completed", message: "Please proceed to Counter " + tokenData.counter + " ✅", emoji: "✅" },
+    completed: { color: "bg-accent/15 text-accent border-accent/20", dotColor: "bg-accent", label: "Completed", message: `Service completed in ${tokenData.serviceTime}m at Counter ${tokenData.counter} ✅`, emoji: "✅" },
     cancelled: { color: "bg-destructive/15 text-destructive border-destructive/20", dotColor: "bg-destructive", label: "Cancelled", message: "You have left the queue", emoji: "❌" },
   };
 

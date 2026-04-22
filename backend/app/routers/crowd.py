@@ -121,6 +121,8 @@ async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_
 
     try:
         model = _get_model()
+        logger.info(f"Running YOLO inference on frame shape: {frame.shape}")
+        
         # Use predict with explicit confidence threshold and classes (0 = person)
         results = model.predict(
             frame, 
@@ -135,6 +137,8 @@ async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_
         raise
     except Exception as e:
         logger.error(f"YOLO inference failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"YOLO analysis failed: {str(e)}")
 
     # Class 0 = person in COCO
@@ -168,6 +172,10 @@ async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_
                 cv2.putText(frame_bgr, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
     
     logger.info(f"Detection complete: {count} person(s) found with {len(detections)} detection record(s)")
+    
+    # Ensure we return valid response even with 0 detections
+    if count == 0:
+        logger.info("No people detected in frame")
 
     # Convert back to RGB for output
     frame_annotated = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)

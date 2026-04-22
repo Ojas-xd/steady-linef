@@ -27,6 +27,7 @@ const Dashboard = () => {
   const [selectedCategory, setSelectedCategory] = useState<IssueCategory>("standard");
   const [customMinutes, setCustomMinutes] = useState(8);
   const [issueNote, setIssueNote] = useState("");
+  const [isUpdateTimeMode, setIsUpdateTimeMode] = useState(false);  // True when updating time for auto-called customer
 
   // Fetch tokens from API when not using sample data
   useEffect(() => {
@@ -91,7 +92,41 @@ const Dashboard = () => {
 
   const handleServeConfirm = useCallback(async () => {
     if (!serveModalTokenId) return;
-    const estMinutes = selectedCategory === "custom" ? customMinutes : CATEGORY_CONFIG[selectedCategory as keyof typeof CATEGORY_CONFIG].minutes;
+    const estMinutes = customMinutes;
+
+    // If updating time for already-serving token
+    if (isUpdateTimeMode) {
+      // Optimistic update
+      setTokens((prev) =>
+        prev.map((t) =>
+          t.id === serveModalTokenId
+            ? { ...t, estimatedMinutes: estMinutes, issueDescription: issueNote || undefined }
+            : t
+        )
+      );
+
+      const resetModal = () => {
+        setServeModalTokenId(null);
+        setIsUpdateTimeMode(false);
+        setIssueNote("");
+      };
+
+      if (sampleDataEnabled) {
+        resetModal();
+        return;
+      }
+
+      try {
+        await tokensApi.updateTime(serveModalTokenId, estMinutes, issueNote || undefined);
+      } catch (err) {
+        console.warn("[API] Update time failed, using local state:", err);
+      }
+
+      resetModal();
+      return;
+    }
+
+    // Regular serve flow for waiting tokens
     const counter = Math.ceil(Math.random() * 5);
 
     // Optimistic update
@@ -129,7 +164,7 @@ const Dashboard = () => {
     }
 
     resetModal();
-  }, [serveModalTokenId, selectedCategory, customMinutes, issueNote, sampleDataEnabled]);
+  }, [serveModalTokenId, selectedCategory, customMinutes, issueNote, sampleDataEnabled, isUpdateTimeMode]);
 
   const filteredTokens = activeTokens.filter(
     (t) => !searchQuery || t.id.toLowerCase().includes(searchQuery.toLowerCase())
@@ -328,9 +363,21 @@ const Dashboard = () => {
                         </button>
                       )}
                       {token.status === "serving" && (
-                        <button onClick={() => handleComplete(token.id)} className="px-3 py-1.5 rounded-lg bg-accent/15 text-accent text-xs font-semibold hover:bg-accent/25 transition-colors">
-                          Complete
-                        </button>
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => {
+                              setServeModalTokenId(token.id);
+                              setIsUpdateTimeMode(true);
+                              setCustomMinutes(token.estimatedMinutes || 10);
+                            }} 
+                            className="px-3 py-1.5 rounded-lg bg-primary/15 text-primary text-xs font-semibold hover:bg-primary/25 transition-colors"
+                          >
+                            Update Time
+                          </button>
+                          <button onClick={() => handleComplete(token.id)} className="px-3 py-1.5 rounded-lg bg-accent/15 text-accent text-xs font-semibold hover:bg-accent/25 transition-colors">
+                            Complete
+                          </button>
+                        </div>
                       )}
                     </td>
                   </motion.tr>
@@ -354,68 +401,66 @@ const Dashboard = () => {
               <div className="w-14 h-14 rounded-2xl hero-gradient-bg flex items-center justify-center mx-auto mb-3">
                 <Ticket className="w-7 h-7 text-primary-foreground" />
               </div>
-              <h3 className="text-lg font-bold text-foreground">Categorize & Serve</h3>
+              <h3 className="text-lg font-bold text-foreground">
+                {isUpdateTimeMode ? "Update Service Time" : "Serve Customer"}
+              </h3>
               <p className="text-sm text-muted-foreground">
-                Token <span className="font-mono font-bold text-foreground">{serveModalTokenId}</span> — what's the issue?
+                {isUpdateTimeMode 
+                  ? "Customer has been called. Ask how much time they need." 
+                  : "Ask customer how much time they need, then enter below"}
               </p>
             </div>
 
-            {/* Category Selection */}
-            <div className="space-y-3 mb-5">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Issue complexity</p>
-              <div className="grid grid-cols-3 gap-2">
-                {(Object.entries(CATEGORY_CONFIG) as [string, typeof CATEGORY_CONFIG.quick][]).map(([key, cfg]) => (
+            {/* Time Selection - Staff asks customer */}
+            <div className="space-y-4 mb-5">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider text-center">
+                How much time does the customer need?
+              </p>
+              
+              {/* Quick preset buttons */}
+              <div className="grid grid-cols-4 gap-2">
+                {[5, 10, 15, 20].map((mins) => (
                   <button
-                    key={key}
-                    onClick={() => setSelectedCategory(key as IssueCategory)}
-                    className={`flex flex-col items-center gap-1.5 p-3 rounded-xl border-2 transition-all duration-200 ${
-                      selectedCategory === key
-                        ? "border-primary bg-primary/10 scale-[1.02]"
+                    key={mins}
+                    onClick={() => {
+                      setSelectedCategory("custom");
+                      setCustomMinutes(mins);
+                    }}
+                    className={`p-2 rounded-xl border-2 transition-all duration-200 text-center ${
+                      selectedCategory === "custom" && customMinutes === mins
+                        ? "border-primary bg-primary/10"
                         : "border-border bg-secondary hover:border-muted-foreground/30"
                     }`}
                   >
-                    <cfg.icon className={`w-5 h-5 ${selectedCategory === key ? "text-primary" : "text-muted-foreground"}`} />
-                    <span className={`text-xs font-semibold ${selectedCategory === key ? "text-primary" : "text-foreground"}`}>{cfg.label}</span>
-                    <span className="text-[10px] text-muted-foreground font-mono">{cfg.minutes} min</span>
+                    <span className="text-sm font-bold">{mins}</span>
+                    <span className="text-[10px] text-muted-foreground block">min</span>
                   </button>
                 ))}
               </div>
 
-              {/* Custom time option */}
-              <button
-                onClick={() => setSelectedCategory("custom")}
-                className={`w-full flex items-center justify-between p-3 rounded-xl border-2 transition-all duration-200 ${
-                  selectedCategory === "custom"
-                    ? "border-primary bg-primary/10"
-                    : "border-border bg-secondary hover:border-muted-foreground/30"
-                }`}
-              >
+              {/* Custom time input */}
+              <div className="flex items-center justify-center gap-3 p-3 rounded-xl border-2 border-border bg-secondary">
+                <Timer className="w-5 h-5 text-muted-foreground" />
                 <div className="flex items-center gap-2">
-                  <Timer className={`w-4 h-4 ${selectedCategory === "custom" ? "text-primary" : "text-muted-foreground"}`} />
-                  <span className={`text-xs font-semibold ${selectedCategory === "custom" ? "text-primary" : "text-foreground"}`}>Custom Time</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={120}
+                    value={customMinutes}
+                    onChange={(e) => setCustomMinutes(Math.max(1, Math.min(120, Number(e.target.value) || 1)))}
+                    className="w-20 px-3 py-2 rounded-lg bg-background border border-border text-foreground text-lg font-bold text-center focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  />
+                  <span className="text-sm text-muted-foreground font-medium">minutes</span>
                 </div>
-                {selectedCategory === "custom" && (
-                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="number"
-                      min={1}
-                      max={60}
-                      value={customMinutes}
-                      onChange={(e) => setCustomMinutes(Math.max(1, Math.min(60, Number(e.target.value))))}
-                      className="w-14 px-2 py-1 rounded-lg bg-background border border-border text-foreground text-xs font-mono text-center focus:outline-none focus:ring-2 focus:ring-primary/50"
-                    />
-                    <span className="text-[10px] text-muted-foreground">min</span>
-                  </div>
-                )}
-              </button>
+              </div>
             </div>
 
-            {/* Optional note */}
+            {/* Customer name note */}
             <div className="mb-5">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Note (optional)</p>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Customer / Issue Note (optional)</p>
               <input
                 type="text"
-                placeholder="Brief issue description..."
+                placeholder="e.g., Bill payment, Account opening..."
                 value={issueNote}
                 onChange={(e) => setIssueNote(e.target.value)}
                 maxLength={100}
@@ -424,19 +469,29 @@ const Dashboard = () => {
             </div>
 
             {/* Summary */}
-            <div className="bg-secondary/50 rounded-xl p-3 mb-5 flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">Estimated service time:</span>
-              <span className="text-sm font-bold text-foreground font-mono">
-                {selectedCategory === "custom" ? customMinutes : CATEGORY_CONFIG[selectedCategory as keyof typeof CATEGORY_CONFIG].minutes} min
+            <div className="bg-primary/10 rounded-xl p-4 mb-5 text-center border border-primary/20">
+              <span className="text-xs text-primary/70 uppercase tracking-wider block mb-1">Customer will be notified</span>
+              <span className="text-2xl font-bold text-primary font-mono">
+                {customMinutes} minutes
+              </span>
+              <span className="text-xs text-muted-foreground block mt-1">
+                Estimated service time
               </span>
             </div>
 
             <div className="flex gap-3">
-              <button onClick={() => { setServeModalTokenId(null); setSelectedCategory("standard"); setIssueNote(""); }} className="flex-1 px-4 py-2.5 rounded-xl bg-secondary text-foreground text-sm font-medium hover:bg-secondary/80 transition-colors">
+              <button onClick={() => { setServeModalTokenId(null); setSelectedCategory("standard"); setIssueNote(""); setIsUpdateTimeMode(false); }} className="flex-1 px-4 py-2.5 rounded-xl bg-secondary text-foreground text-sm font-medium hover:bg-secondary/80 transition-colors">
                 Cancel
               </button>
-              <button onClick={handleServeConfirm} className="flex-1 px-4 py-2.5 rounded-xl hero-gradient-bg text-primary-foreground text-sm font-semibold hover:opacity-90 transition-opacity">
-                Start Serving
+              <button 
+                onClick={() => {
+                  setSelectedCategory("custom");
+                  handleServeConfirm();
+                  setIsUpdateTimeMode(false);
+                }} 
+                className="flex-1 px-4 py-2.5 rounded-xl hero-gradient-bg text-primary-foreground text-sm font-semibold hover:opacity-90 transition-opacity"
+              >
+                {isUpdateTimeMode ? `Update Time (${customMinutes} min)` : `Start Serving (${customMinutes} min)`}
               </button>
             </div>
           </motion.div>

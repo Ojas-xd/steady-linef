@@ -69,6 +69,12 @@ class QueueStatusOut(BaseModel):
     counter: int | None = None
 
 
+class UpdateTimeRequest(BaseModel):
+    """Update estimated time for a serving token"""
+    estimated_minutes: int
+    issue_description: str | None = None
+
+
 # ── Dashboard ─────────────────────────────────────────
 
 class DashboardStats(BaseModel):
