@@ -90,7 +90,7 @@ const TokenPage = () => {
           estimatedWait: statusData.estimated_wait,
           status: statusData.status as typeof prev.status,
           counter: statusData.counter || prev.counter,
-          serviceTime: tokenData?.service_time || prev.serviceTime,
+          serviceTime: Math.round(tokenData?.service_time || prev.serviceTime || 0),
           completedAt: tokenData?.completed_at || prev.completedAt,
         }));
         setFormError(null);
@@ -118,19 +118,42 @@ const TokenPage = () => {
   }, [tokenData.position, tokenData.status, tokenData.peopleAhead]);
 
   const statusConfig = {
-    waiting: { color: "bg-warning/15 text-warning border-warning/20", dotColor: "bg-warning", label: "Waiting", message: "Please wait, we'll call you soon 🙏", emoji: "⏳" },
-    serving: { color: "bg-primary/15 text-primary border-primary/20", dotColor: "bg-primary animate-pulse-slow", label: "Now Serving", message: "Your turn is coming up! 🎉", emoji: "🔔" },
-    completed: { color: "bg-accent/15 text-accent border-accent/20", dotColor: "bg-accent", label: "Completed", message: `Service completed in ${tokenData.serviceTime}m at Counter ${tokenData.counter} ✅`, emoji: "✅" },
-    cancelled: { color: "bg-destructive/15 text-destructive border-destructive/20", dotColor: "bg-destructive", label: "Cancelled", message: "You have left the queue", emoji: "❌" },
+    waiting: { 
+      color: "bg-warning/15 text-warning border-warning/20", 
+      dotColor: "bg-warning", 
+      label: tokenData.position === 1 ? "You're Next!" : "Waiting", 
+      message: tokenData.position === 1 
+        ? "🎉 Please proceed to the counter now!" 
+        : `⏳ ${tokenData.peopleAhead} people ahead. Est. wait: ${tokenData.estimatedWait}m`, 
+      emoji: tokenData.position === 1 ? "🎉" : "⏳" 
+    },
+    serving: { 
+      color: "bg-primary/15 text-primary border-primary/20", 
+      dotColor: "bg-primary animate-pulse-slow", 
+      label: "Being Served", 
+      message: `✅ Staff is helping you at Counter ${tokenData.counter}`, 
+      emoji: "✅" 
+    },
+    completed: { 
+      color: "bg-accent/15 text-accent border-accent/20", 
+      dotColor: "bg-accent", 
+      label: "Completed", 
+      message: `✅ Service completed in ${Math.round(tokenData.serviceTime || 0)}m at Counter ${tokenData.counter}`, 
+      emoji: "✅" 
+    },
+    cancelled: { 
+      color: "bg-destructive/15 text-destructive border-destructive/20", 
+      dotColor: "bg-destructive", 
+      label: "Cancelled", 
+      message: "❌ You have left the queue", 
+      emoji: "❌" 
+    },
   };
 
   const config = statusConfig[tokenData.status];
   const shareTokenUrl = tokenData.tokenNumber 
     ? `${window.location.origin}/token?num=${encodeURIComponent(tokenData.tokenNumber)}`
     : `${window.location.origin}/token?id=${encodeURIComponent(tokenData.id)}`;
-  
-  // Check if just started serving (for visual notification)
-  const justStartedServing = tokenData.status === "serving" && prevStatusRef.current === "serving";
 
   const handleJoinQueue = async (event: FormEvent) => {
     event.preventDefault();
@@ -259,16 +282,28 @@ const TokenPage = () => {
             </div>
 
             <div className="p-6 space-y-5">
-            {/* Notification Banner - When Serving */}
+            {/* Notification Banner - When First in Line (position 1) or Serving */}
+              {(tokenData.status === "waiting" && tokenData.position === 1) && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="bg-primary/20 border-2 border-primary rounded-xl p-4 text-center animate-pulse-slow"
+                >
+                  <p className="text-2xl mb-1">🎉</p>
+                  <p className="text-lg font-bold text-primary">You're next!</p>
+                  <p className="text-sm text-primary/80">Please proceed to the counter now</p>
+                </motion.div>
+              )}
+              
               {tokenData.status === "serving" && (
                 <motion.div
                   initial={{ opacity: 0, scale: 0.9 }}
                   animate={{ opacity: 1, scale: 1 }}
                   className="bg-accent/20 border-2 border-accent rounded-xl p-4 text-center animate-pulse-slow"
                 >
-                  <p className="text-2xl mb-1">🎉</p>
-                  <p className="text-lg font-bold text-accent">Your turn is here!</p>
-                  <p className="text-sm text-accent/80">Please proceed to the counter</p>
+                  <p className="text-2xl mb-1">✅</p>
+                  <p className="text-lg font-bold text-accent">Being served now</p>
+                  <p className="text-sm text-accent/80">Staff is helping you at Counter {tokenData.counter}</p>
                 </motion.div>
               )}
               

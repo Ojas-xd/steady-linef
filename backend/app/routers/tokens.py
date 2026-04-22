@@ -11,10 +11,19 @@ router = APIRouter(prefix="/tokens", tags=["Tokens"])
 
 
 def _next_token_number(db: Session) -> str:
-    """Generate simple sequential token numbers (1, 2, 3...)"""
-    # Get the highest token number that's numeric
+    """Generate simple sequential token numbers (1, 2, 3...) based on active tokens today."""
     from sqlalchemy import func
-    result = db.query(func.max(Token.token_number)).filter(Token.token_number.regexp_match('^\\d+$')).scalar()
+    
+    # Only count tokens from today (active queue for the day)
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    # Get max token number from today's active tokens (waiting or serving)
+    result = db.query(func.max(Token.token_number)).filter(
+        Token.token_number.regexp_match('^\\d+$'),
+        Token.issued_at >= today_start,
+        Token.status.in_([TokenStatus.waiting, TokenStatus.serving])
+    ).scalar()
+    
     if not result:
         return "1"
     try:
@@ -87,19 +96,8 @@ def complete_token(token_id: str, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(token)
     
-    # Auto-serve the next waiting customer (oldest issued)
-    next_token = db.query(Token).filter(
-        Token.status == TokenStatus.waiting
-    ).order_by(Token.issued_at.asc()).first()
-    
-    if next_token:
-        next_token.status = TokenStatus.serving
-        next_token.served_at = datetime.utcnow()
-        next_token.counter = token.counter or 1  # Use same counter
-        next_token.estimated_minutes = 10  # Default 10 min, staff can update
-        db.commit()
-        db.refresh(next_token)
-        print(f"[Queue] Auto-called next customer: {next_token.token_number} at Counter {next_token.counter}")
+    # Note: Next customer will see "Your turn!" notification when they are first in line
+    # Staff will then click "Serve" to start service and ask for time
     
     return token
 
@@ -153,13 +151,34 @@ def get_queue_status(token_id: str, db: Session = Depends(get_db)):
         Token.issued_at < token.issued_at,
     ).count()
 
-    # Average service time for estimation
-    from sqlalchemy import func
-    avg_time = db.query(func.avg(Token.service_time)).filter(Token.service_time.isnot(None)).scalar() or 8.0
+    # Calculate estimated wait time for waiting customers
+    estimated_wait = 0
+    if token.status == TokenStatus.waiting:
+        # Get all currently serving tokens (assume half their time remaining)
+        serving_tokens = db.query(Token).filter(Token.status == TokenStatus.serving).all()
+        serving_remaining = sum(
+            (t.estimated_minutes or 10) / 2 for t in serving_tokens
+        )
+        
+        # Get all waiting tokens ahead of this one
+        waiting_ahead = db.query(Token).filter(
+            Token.status == TokenStatus.waiting,
+            Token.issued_at < token.issued_at,
+        ).order_by(Token.issued_at.asc()).all()
+        
+        # Sum up time for each person ahead (use default 10 min if not set)
+        waiting_time = sum(
+            (t.estimated_minutes or 10) for t in waiting_ahead
+        )
+        
+        estimated_wait = int(serving_remaining + waiting_time)
+        
+        # Cap at reasonable max (2 hours)
+        estimated_wait = min(estimated_wait, 120)
 
     return QueueStatusOut(
         position=ahead + 1 if token.status == TokenStatus.waiting else 0,
-        estimated_wait=int(ahead * avg_time) if token.status == TokenStatus.waiting else 0,
+        estimated_wait=estimated_wait,
         status=token.status.value,
         counter=token.counter,
     )

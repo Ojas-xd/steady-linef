@@ -346,7 +346,7 @@ const Dashboard = () => {
                       {token.status === "waiting" && waitInfo ? (
                         <span className="font-mono font-semibold text-muted-foreground">~{waitInfo.calculatedWait}m</span>
                       ) : token.status === "serving" ? (
-                        <span className="font-mono font-semibold text-primary">{token.estimatedMinutes}m</span>
+                        <span className="font-mono font-semibold text-primary">{Math.round(token.estimatedMinutes || 0)}m</span>
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}

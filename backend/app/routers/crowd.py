@@ -1,7 +1,7 @@
 import io
 import base64
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session
@@ -29,26 +29,41 @@ def _get_model():
             from app.config import settings
             import os
             
-            logger.info(f"Loading YOLO model from: {settings.YOLO_MODEL_PATH}")
+            logger.info(f"[YOLO] Loading model from: {settings.YOLO_MODEL_PATH}")
+            logger.info(f"[YOLO] Current working directory: {os.getcwd()}")
+            logger.info(f"[YOLO] Model file exists: {os.path.exists(settings.YOLO_MODEL_PATH)}")
             
             # Check if model file exists
             if not os.path.exists(settings.YOLO_MODEL_PATH):
-                logger.warning(f"Model file not found at {settings.YOLO_MODEL_PATH}, downloading...")
+                logger.warning(f"[YOLO] Model file not found at {settings.YOLO_MODEL_PATH}, will attempt download...")
             
             # Load model - will auto-download if not present
-            _model = YOLO(settings.YOLO_MODEL_PATH)
+            try:
+                _model = YOLO(settings.YOLO_MODEL_PATH)
+                logger.info(f"[YOLO] Model loaded. Classes: {len(_model.names)}, Names: {list(_model.names.values())[:5]}...")
+            except Exception as load_err:
+                logger.error(f"[YOLO] Model load failed: {load_err}")
+                raise
             
             # Warm up model with dummy inference
-            import numpy as np
-            dummy = np.zeros((640, 480, 3), dtype=np.uint8)
-            _model.predict(dummy, verbose=False, conf=0.25)
+            try:
+                dummy = np.zeros((640, 480, 3), dtype=np.uint8)
+                logger.info(f"[YOLO] Running warmup inference...")
+                _model.predict(dummy, verbose=False, conf=0.25)
+                logger.info(f"[YOLO] Warmup complete. Model ready!")
+            except Exception as warmup_err:
+                logger.error(f"[YOLO] Warmup failed: {warmup_err}")
+                raise
             
-            logger.info(f"YOLO model loaded successfully. Classes: {len(_model.names)}")
         except Exception as e:
+            import traceback
             _model_error = str(e)
-            logger.error(f"Failed to load YOLO model: {e}")
+            logger.error(f"[YOLO] Failed to load model: {e}")
+            logger.error(f"[YOLO] Traceback: {traceback.format_exc()}")
+    
     if _model_error:
         raise HTTPException(status_code=503, detail=f"YOLO model not available: {_model_error}")
+    
     return _model
 
 
@@ -73,7 +88,6 @@ def crowd_health_check():
 @router.get("/count")
 def get_live_count(db: Session = Depends(get_db)):
     """Get latest crowd count, but only if it's recent (within last 5 minutes)"""
-    from datetime import timedelta
     cutoff = datetime.utcnow() - timedelta(minutes=5)
     
     # Only get counts from last 5 minutes to avoid showing stale data

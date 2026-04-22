@@ -334,11 +334,11 @@ const Analytics = () => {
                   <td className="py-3 px-3 text-muted-foreground hidden sm:table-cell">{token.completedAt}</td>
                   <td className="py-3 px-3">
                     <span className={`font-semibold font-mono ${
-                      (token.serviceTime || 0) <= 5 ? "text-accent" :
-                      (token.serviceTime || 0) <= 10 ? "text-warning" :
+                      Math.round(token.serviceTime || 0) <= 5 ? "text-accent" :
+                      Math.round(token.serviceTime || 0) <= 10 ? "text-warning" :
                       "text-destructive"
                     }`}>
-                      {token.serviceTime}m
+                      {Math.round(token.serviceTime || 0)}m
                     </span>
                   </td>
                 </motion.tr>

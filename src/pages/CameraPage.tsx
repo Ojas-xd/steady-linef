@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import LiveClock from "@/components/LiveClock";
-import { Camera, Zap } from "lucide-react";
+import { Camera, Zap, Activity } from "lucide-react";
 import { crowdApi } from "@/lib/api";
 
 const CameraPage = () => {
@@ -12,9 +12,25 @@ const CameraPage = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [autoAnalyzeEnabled, setAutoAnalyzeEnabled] = useState(true);
   const [showAnnotated, setShowAnnotated] = useState(true);
+  const [healthStatus, setHealthStatus] = useState<{status: string; model_loaded?: boolean; error?: string} | null>(null);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const analysisTimerRef = useRef<number | null>(null);
+
+  const checkHealth = async () => {
+    setIsCheckingHealth(true);
+    try {
+      const status = await crowdApi.getHealth();
+      setHealthStatus(status);
+      console.log("[YOLO] Health check:", status);
+    } catch (err: any) {
+      setHealthStatus({ status: "error", error: err.message });
+      console.error("[YOLO] Health check failed:", err);
+    } finally {
+      setIsCheckingHealth(false);
+    }
+  };
 
   const stopCamera = () => {
     if (analysisTimerRef.current !== null) {
@@ -194,7 +210,41 @@ const CameraPage = () => {
             )}
           </div>
 
-          {cameraError && <p className="mb-4 text-sm text-destructive">{cameraError}</p>}
+          {/* Health Status */}
+          <div className="mb-4 flex items-center justify-between rounded-xl border border-border/70 bg-background px-4 py-3">
+            <div className="flex items-center gap-2">
+              <Activity className="w-4 h-4 text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">YOLO Model</span>
+              {healthStatus && (
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
+                  healthStatus.model_loaded 
+                    ? "bg-accent/20 text-accent" 
+                    : "bg-destructive/20 text-destructive"
+                }`}>
+                  {healthStatus.model_loaded ? "Ready" : "Not Ready"}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={checkHealth}
+              disabled={isCheckingHealth}
+              className="text-xs font-semibold text-primary hover:text-primary/80 disabled:opacity-50"
+            >
+              {isCheckingHealth ? "Checking..." : "Check Health"}
+            </button>
+          </div>
+
+          {healthStatus?.error && (
+            <div className="mb-4 rounded-xl border border-destructive/20 bg-destructive/10 p-3">
+              <p className="text-xs text-destructive font-semibold">Error: {healthStatus.error}</p>
+            </div>
+          )}
+
+          {cameraError && (
+            <div className="mb-4 rounded-xl border border-destructive/20 bg-destructive/10 p-3">
+              <p className="text-xs text-destructive font-semibold">{cameraError}</p>
+            </div>
+          )}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <button

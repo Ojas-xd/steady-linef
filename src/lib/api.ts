@@ -281,12 +281,51 @@ export const crowdApi = {
     );
   },
 
+  /** Check YOLO model health status */
+  getHealth: async (): Promise<{ status: string; model_loaded?: boolean; error?: string }> => {
+    const res = await api.get("/crowd/health");
+    return res.data;
+  },
+
   /** Upload a frame for YOLO analysis */
   analyzeFrame: async (imageFile: File): Promise<{ count: number; image?: string; detections?: Array<{ box: number[]; confidence: number }> }> => {
-    const formData = new FormData();
-    formData.append("file", imageFile);
-    const res = await api.post("/crowd/analyze", formData);
-    return res.data;
+    try {
+      const formData = new FormData();
+      formData.append("file", imageFile);
+      
+      // For FormData, we MUST NOT set Content-Type header - browser sets it automatically with boundary
+      const res = await api.post("/crowd/analyze", formData, {
+        headers: {
+          // Remove Content-Type to let browser set it with boundary for multipart/form-data
+          'Content-Type': undefined,
+        },
+      });
+      
+      console.log("[YOLO] Analysis success:", res.data);
+      return res.data;
+    } catch (err: any) {
+      console.error("[YOLO] Analysis failed:", err);
+      
+      // Extract detailed error message from response
+      if (err.response) {
+        const status = err.response.status;
+        const detail = err.response.data?.detail || err.response.data?.message || JSON.stringify(err.response.data);
+        
+        if (status === 422) {
+          throw new Error(`Validation error: ${detail}`);
+        } else if (status === 500) {
+          throw new Error(`Server error: ${detail}`);
+        } else if (status === 503) {
+          throw new Error(`YOLO model not loaded: ${detail}`);
+        } else {
+          throw new Error(`API error ${status}: ${detail}`);
+        }
+      } else if (err.request) {
+        throw new Error("No response from server. Check if backend is running.");
+      } else {
+        throw new Error(err.message || "Request failed");
+      }
+    }
   },
 };
 
