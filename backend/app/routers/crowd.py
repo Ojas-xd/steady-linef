@@ -39,7 +39,13 @@ def _get_model():
 
 @router.get("/count")
 def get_live_count(db: Session = Depends(get_db)):
-    latest = db.query(CrowdCount).order_by(CrowdCount.timestamp.desc()).first()
+    """Get latest crowd count, but only if it's recent (within last 5 minutes)"""
+    from datetime import timedelta
+    cutoff = datetime.utcnow() - timedelta(minutes=5)
+    
+    # Only get counts from last 5 minutes to avoid showing stale data
+    latest = db.query(CrowdCount).filter(CrowdCount.timestamp >= cutoff).order_by(CrowdCount.timestamp.desc()).first()
+    
     return {
         "count": latest.count if latest else 0,
         "timestamp": latest.timestamp.isoformat() if latest else datetime.utcnow().isoformat(),

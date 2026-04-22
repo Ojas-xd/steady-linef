@@ -81,6 +81,8 @@ export const authApi = {
 
 export interface TokenResponse extends Token {
   customer_name?: string;
+  customer_phone?: string;
+  token_number?: string;
 }
 
 export interface ServePayload {

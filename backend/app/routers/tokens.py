@@ -11,11 +11,17 @@ router = APIRouter(prefix="/tokens", tags=["Tokens"])
 
 
 def _next_token_number(db: Session) -> str:
-    last = db.query(Token).order_by(Token.issued_at.desc()).first()
-    if not last:
-        return "T-001"
-    num = int(last.token_number.split("-")[1]) + 1
-    return f"T-{num:03d}"
+    """Generate simple sequential token numbers (1, 2, 3...)"""
+    # Get the highest token number that's numeric
+    from sqlalchemy import func
+    result = db.query(func.max(Token.token_number)).filter(Token.token_number.regexp_match('^\\d+$')).scalar()
+    if not result:
+        return "1"
+    try:
+        next_num = int(result) + 1
+        return str(next_num)
+    except (ValueError, TypeError):
+        return "1"
 
 
 @router.post("/", response_model=TokenOut)

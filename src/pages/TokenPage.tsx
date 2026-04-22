@@ -16,6 +16,7 @@ const TokenPage = () => {
 
   const [tokenData, setTokenData] = useState({
     id: tokenId ?? "N/A",
+    tokenNumber: "",
     status: "waiting" as "waiting" | "serving" | "completed" | "cancelled",
     position: 0,
     peopleAhead: 0,
@@ -35,40 +36,44 @@ const TokenPage = () => {
 
     setTokenData((prev) => ({ ...prev, id: tokenId }));
 
-    const fetchStatus = () => {
-      tokensApi
-        .getQueueStatus(tokenId)
-        .then((data) => {
-          // position from backend is 1-indexed (includes user), so peopleAhead = position - 1
-          const peopleAhead = data.status === "waiting" ? Math.max(0, data.position - 1) : 0;
-          
-          // Check if status changed to serving - trigger notification
-          const prevStatus = prevStatusRef.current;
-          if (prevStatus && prevStatus !== "serving" && data.status === "serving") {
-            // Play notification sound
-            if (audioRef.current) {
-              audioRef.current.play().catch(() => {});
-            }
-            // Vibrate on mobile devices
-            if (navigator.vibrate) {
-              navigator.vibrate([200, 100, 200, 100, 400]);
-            }
+    const fetchStatus = async () => {
+      try {
+        // Fetch both status and token details
+        const [statusData, tokenData] = await Promise.all([
+          tokensApi.getQueueStatus(tokenId),
+          tokensApi.getById(tokenId),
+        ]);
+        
+        // position from backend is 1-indexed (includes user), so peopleAhead = position - 1
+        const peopleAhead = statusData.status === "waiting" ? Math.max(0, statusData.position - 1) : 0;
+        
+        // Check if status changed to serving - trigger notification
+        const prevStatus = prevStatusRef.current;
+        if (prevStatus && prevStatus !== "serving" && statusData.status === "serving") {
+          // Play notification sound
+          if (audioRef.current) {
+            audioRef.current.play().catch(() => {});
           }
-          prevStatusRef.current = data.status;
-          
-          setTokenData((prev) => ({
-            ...prev,
-            position: data.position,
-            peopleAhead,
-            estimatedWait: data.estimated_wait,
-            status: data.status as typeof prev.status,
-            counter: data.counter || prev.counter,
-          }));
-          setFormError(null);
-        })
-        .catch(() => {
-          setFormError("Unable to fetch token status. Please refresh and try again.");
-        });
+          // Vibrate on mobile devices
+          if (navigator.vibrate) {
+            navigator.vibrate([200, 100, 200, 100, 400]);
+          }
+        }
+        prevStatusRef.current = statusData.status;
+        
+        setTokenData((prev) => ({
+          ...prev,
+          tokenNumber: tokenData?.token_number || prev.tokenNumber,
+          position: statusData.position,
+          peopleAhead,
+          estimatedWait: statusData.estimated_wait,
+          status: statusData.status as typeof prev.status,
+          counter: statusData.counter || prev.counter,
+        }));
+        setFormError(null);
+      } catch {
+        setFormError("Unable to fetch token status. Please refresh and try again.");
+      }
     };
 
     fetchStatus();
@@ -97,7 +102,9 @@ const TokenPage = () => {
   };
 
   const config = statusConfig[tokenData.status];
-  const shareTokenUrl = `${window.location.origin}/token?id=${encodeURIComponent(tokenData.id)}`;
+  const shareTokenUrl = tokenData.tokenNumber 
+    ? `${window.location.origin}/token?num=${encodeURIComponent(tokenData.tokenNumber)}`
+    : `${window.location.origin}/token?id=${encodeURIComponent(tokenData.id)}`;
   
   // Check if just started serving (for visual notification)
   const justStartedServing = tokenData.status === "serving" && prevStatusRef.current === "serving";
@@ -120,6 +127,8 @@ const TokenPage = () => {
         customerName: normalizedName,
         customerPhone: normalizedPhone,
       });
+      // Store token number for display, but use ID for URL
+      setTokenData(prev => ({ ...prev, tokenNumber: token.token_number || "" }));
       navigate(`/token?id=${encodeURIComponent(token.id)}`);
     } catch {
       setFormError("Unable to join queue right now. Please try again.");
@@ -217,12 +226,12 @@ const TokenPage = () => {
             <div className="hero-gradient-bg p-6 text-center">
               <p className="text-primary-foreground/70 text-xs font-semibold uppercase tracking-widest">Your Token Number</p>
               <motion.p
-                key={tokenData.id}
+                key={tokenData.tokenNumber || tokenData.id}
                 initial={{ scale: 0.5 }}
                 animate={{ scale: 1 }}
                 className="text-6xl font-black text-primary-foreground mt-2 font-mono"
               >
-                #{tokenData.id.split("-")[1]}
+                #{tokenData.tokenNumber || tokenData.id.slice(0, 8)}
               </motion.p>
             </div>
 
