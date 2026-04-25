@@ -6,8 +6,47 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Token, TokenStatus, IssueCategory
 from app.schemas import TokenIssueRequest, ServeRequest, TokenOut, QueueStatusOut, UpdateTimeRequest
+from app.config import settings
 
 router = APIRouter(prefix="/tokens", tags=["Tokens"])
+
+def _avg_service_minutes(db: Session, fallback: float = 10.0) -> float:
+    """Estimate average service duration from recent completed tokens."""
+    recent = (
+        db.query(Token.service_time)
+        .filter(
+            Token.status == TokenStatus.completed,
+            Token.service_time.isnot(None),
+            Token.service_time > 0,
+            Token.service_time < 180,  # ignore extreme outliers
+        )
+        .order_by(Token.completed_at.desc())
+        .limit(50)
+        .all()
+    )
+    if not recent:
+        return fallback
+    vals = [float(r[0]) for r in recent if r and r[0] is not None]
+    if not vals:
+        return fallback
+    # Robust-ish average: trim 10% from each end if enough samples.
+    vals.sort()
+    if len(vals) >= 10:
+        k = max(1, int(len(vals) * 0.1))
+        vals = vals[k:-k] if len(vals) > 2 * k else vals
+    return max(1.0, min(60.0, sum(vals) / len(vals)))
+
+
+def _serving_remaining_minutes(t: Token, now: datetime) -> float:
+    """Remaining minutes for a serving token."""
+    est = float(t.estimated_minutes or 0)
+    if est <= 0:
+        return 0.0
+    if t.served_at:
+        elapsed = (now - t.served_at).total_seconds() / 60.0
+        return max(0.0, est - elapsed)
+    # If served_at missing, assume halfway done.
+    return max(0.0, est / 2.0)
 
 
 def _next_token_number(db: Session) -> str:
@@ -155,27 +194,35 @@ def get_queue_status(token_id: str, db: Session = Depends(get_db)):
     # Calculate estimated wait time for waiting customers
     estimated_wait = 0
     if token.status == TokenStatus.waiting:
-        # Get all currently serving tokens (assume half their time remaining)
+        now = datetime.utcnow()
+
+        # Learn a realistic default per-customer service time from actual history.
+        avg_minutes = _avg_service_minutes(db, fallback=10.0)
+
+        # Parallelism: estimate throughput by number of active servers (counters currently serving).
         serving_tokens = db.query(Token).filter(Token.status == TokenStatus.serving).all()
-        serving_remaining = sum(
-            (t.estimated_minutes or 10) / 2 for t in serving_tokens
+        # Prefer a configured counters count (production), but never lower than currently serving.
+        servers = max(1, int(getattr(settings, "COUNTERS_COUNT", 1)), len(serving_tokens))
+
+        # Remaining work in front of this customer.
+        serving_remaining = sum(_serving_remaining_minutes(t, now) for t in serving_tokens)
+
+        waiting_ahead = (
+            db.query(Token)
+            .filter(
+                Token.status == TokenStatus.waiting,
+                Token.issued_at < token.issued_at,
+            )
+            .order_by(Token.issued_at.asc())
+            .all()
         )
-        
-        # Get all waiting tokens ahead of this one
-        waiting_ahead = db.query(Token).filter(
-            Token.status == TokenStatus.waiting,
-            Token.issued_at < token.issued_at,
-        ).order_by(Token.issued_at.asc()).all()
-        
-        # Sum up time for each person ahead (use default 10 min if not set)
-        waiting_time = sum(
-            (t.estimated_minutes or 10) for t in waiting_ahead
-        )
-        
-        estimated_wait = int(serving_remaining + waiting_time)
-        
-        # Cap at reasonable max (2 hours)
-        estimated_wait = min(estimated_wait, 120)
+        waiting_work = sum(float(t.estimated_minutes or avg_minutes) for t in waiting_ahead)
+
+        # Convert total work to ETA by dividing by number of active servers.
+        estimated_wait = int(round((serving_remaining + waiting_work) / servers))
+
+        # Keep within sane bounds for UI; long queues should still be representable.
+        estimated_wait = max(0, min(estimated_wait, 999))
 
     return QueueStatusOut(
         position=ahead + 1 if token.status == TokenStatus.waiting else 0,

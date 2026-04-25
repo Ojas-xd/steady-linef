@@ -16,6 +16,7 @@ const TokenPage = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const tokenId = searchParams.get("id");
+  const tokenNum = searchParams.get("num");
   const [formName, setFormName] = useState("");
   const [formPhone, setFormPhone] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
@@ -36,8 +37,26 @@ const TokenPage = () => {
 
   const hasTokenId = !!tokenId;
 
+  // Support shared links by token number (?num=MMDD-N) by resolving to token id.
+  useEffect(() => {
+    if (tokenId || !tokenNum) return;
+    (async () => {
+      try {
+        const t = await tokensApi.getById(tokenNum);
+        if (t?.id) {
+          navigate(`/token?id=${encodeURIComponent(t.id)}`, { replace: true });
+        } else {
+          setFormError("Token not found. Please re-check the link.");
+        }
+      } catch {
+        setFormError("Unable to load token from link. Please try again.");
+      }
+    })();
+  }, [tokenId, tokenNum, navigate]);
+
   // Notification when status changes to serving
   const prevStatusRef = useRef<string | null>(null);
+  const prevPositionRef = useRef<number | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
   
@@ -67,9 +86,12 @@ const TokenPage = () => {
         // position from backend is 1-indexed (includes user), so peopleAhead = position - 1
         const peopleAhead = statusData.status === "waiting" ? Math.max(0, statusData.position - 1) : 0;
         
-        // Check if status changed to serving - trigger notification
+        // Trigger notification when customer becomes next in line OR starts being served.
         const prevStatus = prevStatusRef.current;
-        if (prevStatus && prevStatus !== "serving" && statusData.status === "serving") {
+        const prevPos = prevPositionRef.current;
+        const becameNext = prevPos !== null && prevPos > 1 && statusData.status === "waiting" && statusData.position === 1;
+        const becameServing = prevStatus && prevStatus !== "serving" && statusData.status === "serving";
+        if (becameNext || becameServing) {
           // Play notification sound
           if (audioRef.current) {
             audioRef.current.play().catch(() => {});
@@ -80,14 +102,17 @@ const TokenPage = () => {
           }
           // Show browser notification
           if ("Notification" in window && Notification.permission === "granted") {
-            new Notification("🎉 Your turn is here!", {
-              body: `Token #${tokenData?.token_number || tokenId} - Please proceed to the counter`,
+            new Notification("Your turn is next", {
+              body: becameServing
+                ? `Token #${tokenData?.token_number || tokenId} - Please proceed to the counter`
+                : `Token #${tokenData?.token_number || tokenId} - You're next in line`,
               icon: "/favicon.ico",
               requireInteraction: true,
             });
           }
         }
         prevStatusRef.current = statusData.status;
+        prevPositionRef.current = statusData.position;
         
         setTokenData((prev) => ({
           ...prev,
