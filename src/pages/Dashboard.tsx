@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Users, Ticket, Clock, TrendingUp, AlertTriangle, Bell, Search, Timer, Zap, Briefcase, Settings } from "lucide-react";
+import { Users, Ticket, Clock, TrendingUp, AlertTriangle, Bell, Search, Timer, Zap, Briefcase, Settings, Store } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from "recharts";
 import { QRCodeSVG } from "qrcode.react";
 import StatCard from "@/components/StatCard";
@@ -48,12 +48,15 @@ const Dashboard = () => {
     // Fetch real data from backend
     const fetchData = async () => {
       try {
-        const [tokensData, statsData] = await Promise.all([
+        const [tokensData, statsData, countersData] = await Promise.all([
           tokensApi.getAll(),
           crowdApi.getLiveCount().catch(() => ({ count: 0 })),
+          tokensApi.getCounters().catch(() => ({ total_counters: 5, active_counters: 0, available_counters: 5 })),
         ]);
         setTokens(tokensData);
         setLiveCount(statsData.count || 0);
+        setTotalCounters(countersData.total_counters);
+        setAvailableCounters(countersData.available_counters);
       } catch (err) {
         console.warn("[Dashboard] Failed to fetch data:", err);
       }
@@ -65,7 +68,13 @@ const Dashboard = () => {
   }, [sampleDataEnabled]);
 
   const activeTokens = tokens.filter((t) => t.status !== "completed" && t.status !== "cancelled");
+  const servingTokens = tokens.filter((t) => t.status === "serving");
+  const activeCounters = servingTokens.length;
   const showAlert = liveCount > 20;
+
+  // Counter management state
+  const [totalCounters, setTotalCounters] = useState(5);
+  const [availableCounters, setAvailableCounters] = useState(5);
 
   // Calculate estimated wait for each waiting token
   const waitingTokensWithWait = useMemo(() => {
@@ -177,6 +186,37 @@ const Dashboard = () => {
     (t) => !searchQuery || t.id.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // Counter management functions
+  const increaseCounters = async () => {
+    if (totalCounters >= 20) return;
+    const newTotal = totalCounters + 1;
+    setTotalCounters(newTotal);
+    if (!sampleDataEnabled) {
+      try {
+        await tokensApi.setCounters(newTotal);
+      } catch (err) {
+        console.warn("[API] Failed to update counters:", err);
+      }
+    }
+  };
+
+  const decreaseCounters = async () => {
+    if (totalCounters <= 1) return;
+    if (activeCounters >= totalCounters) {
+      alert("Cannot remove counter while all counters are active. Complete some tokens first.");
+      return;
+    }
+    const newTotal = totalCounters - 1;
+    setTotalCounters(newTotal);
+    if (!sampleDataEnabled) {
+      try {
+        await tokensApi.setCounters(newTotal);
+      } catch (err) {
+        console.warn("[API] Failed to update counters:", err);
+      }
+    }
+  };
+
   const tooltipStyle = { background: "hsl(217 33% 14%)", border: "1px solid hsl(217 33% 22%)", borderRadius: "12px", color: "#fff", fontSize: "12px" };
 
   return (
@@ -215,12 +255,53 @@ const Dashboard = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 lg:gap-4">
         <StatCard title="Live Count" value={liveCount} subtitle="Auto-refreshing" icon={Users} glowClass="stat-glow-blue" iconColorClass="text-primary" trend={{ value: "12%", positive: true }} />
         <StatCard title="Active Tokens" value={activeTokens.length} subtitle="Waiting + Serving" icon={Ticket} glowClass="stat-glow-green" iconColorClass="text-accent" />
+        <StatCard title="Active Counters" value={activeCounters} subtitle={`of ${totalCounters} Total`} icon={Store} glowClass="stat-glow-blue" iconColorClass="text-primary" />
         <StatCard title="Avg Wait" value="8m" subtitle="Last hour" icon={Clock} glowClass="stat-glow-yellow" iconColorClass="text-warning" trend={{ value: "2m", positive: false }} />
         <StatCard title="Peak Hour" value="12 PM" subtitle="AI Forecast" icon={TrendingUp} glowClass="stat-glow-blue" iconColorClass="text-primary" />
       </div>
+
+      {/* Counter Management */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="glass-card rounded-xl p-4 border border-border/50"
+      >
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-primary/10">
+              <Store className="w-5 h-5 text-primary" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-foreground">Counter Management</h3>
+              <p className="text-xs text-muted-foreground">
+                {activeCounters} of {totalCounters} counters active • {availableCounters} available
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={decreaseCounters}
+              disabled={totalCounters <= 1 || activeCounters >= totalCounters}
+              className="flex items-center justify-center w-10 h-10 rounded-lg bg-secondary border border-border hover:bg-secondary/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <span className="text-lg font-bold text-foreground">−</span>
+            </button>
+            <div className="px-4 py-2 rounded-lg bg-secondary border border-border min-w-[80px] text-center">
+              <span className="font-semibold text-foreground">{totalCounters}</span>
+            </div>
+            <button
+              onClick={increaseCounters}
+              disabled={totalCounters >= 20}
+              className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary/10 border border-primary/30 hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <span className="text-lg font-bold text-primary">+</span>
+            </button>
+          </div>
+        </div>
+      </motion.div>
 
       {/* QR Code for Customers */}
       <motion.div

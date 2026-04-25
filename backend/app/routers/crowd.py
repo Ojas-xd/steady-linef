@@ -102,10 +102,14 @@ def get_live_count(db: Session = Depends(get_db)):
 @router.post("/analyze", response_model=CrowdAnalyzeOut)
 async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Upload an image frame → YOLO detects people → returns count + annotated image."""
+    logger.info(f"[YOLO] Analyze request received: filename={file.filename}, content_type={file.content_type}")
+
     try:
         contents = await file.read()
         if not contents:
             raise HTTPException(status_code=400, detail="Empty file uploaded")
+
+        logger.info(f"[YOLO] File received: {len(contents)} bytes")
         
         image = Image.open(io.BytesIO(contents))
         

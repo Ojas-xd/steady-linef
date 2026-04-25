@@ -170,6 +170,23 @@ export const tokensApi = {
     });
     return res.data;
   },
+
+  /** Get counter configuration (total, active, available) */
+  getCounters: async (): Promise<{ total_counters: number; active_counters: number; available_counters: number }> => {
+    return withFallback(
+      async () => {
+        const res = await api.get("/tokens/counters/config");
+        return res.data;
+      },
+      { total_counters: 5, active_counters: 0, available_counters: 5 }
+    );
+  },
+
+  /** Set total number of counters available */
+  setCounters: async (totalCounters: number): Promise<{ total_counters: number; message: string }> => {
+    const res = await api.post(`/tokens/counters/config?total_counters=${totalCounters}`);
+    return res.data;
+  },
 };
 
 // ── Dashboard / Stats ─────────────────────────────────
@@ -292,25 +309,21 @@ export const crowdApi = {
     try {
       const formData = new FormData();
       formData.append("file", imageFile);
-      
-      // For FormData, we MUST NOT set Content-Type header - browser sets it automatically with boundary
-      const res = await api.post("/crowd/analyze", formData, {
-        headers: {
-          // Remove Content-Type to let browser set it with boundary for multipart/form-data
-          'Content-Type': undefined,
-        },
-      });
-      
+
+      // For FormData, browser sets Content-Type automatically with multipart boundary
+      // We must not set any Content-Type header for file uploads
+      const res = await api.post("/crowd/analyze", formData);
+
       console.log("[YOLO] Analysis success:", res.data);
       return res.data;
     } catch (err: any) {
       console.error("[YOLO] Analysis failed:", err);
-      
+
       // Extract detailed error message from response
       if (err.response) {
         const status = err.response.status;
         const detail = err.response.data?.detail || err.response.data?.message || JSON.stringify(err.response.data);
-        
+
         if (status === 422) {
           throw new Error(`Validation error: ${detail}`);
         } else if (status === 500) {

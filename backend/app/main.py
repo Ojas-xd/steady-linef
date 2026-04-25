@@ -10,13 +10,15 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AI Queue Management System", version="1.0.0")
 
-# CORS
+# CORS - configured for production deployment
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["Content-Length", "Content-Type"],
+    max_age=600,  # Cache preflight requests for 10 minutes
 )
 
 # Mount routers under /api

@@ -32,7 +32,9 @@ class Settings(BaseSettings):
 
     # Set in Render to your Netlify origin(s). Example:
     # CORS_ORIGINS=https://your-site.netlify.app
-    CORS_ORIGINS: list[str] = ["http://localhost:5173"]
+    # For development: ["http://localhost:5173"]
+    # For production deployment, use ["*"] to allow all origins or specify your frontend URL
+    CORS_ORIGINS: list[str] = ["*"]
 
     # Used for wait-time estimation. Set to total staffed counters in production.
     COUNTERS_COUNT: int = 1

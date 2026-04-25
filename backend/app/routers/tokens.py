@@ -185,9 +185,9 @@ def get_queue_status(token_id: str, db: Session = Depends(get_db)):
     # Auto-expire old waiting tokens
     _expire_old_tokens(db)
 
-    # Count how many waiting tokens are ahead (excluding cancelled)
+    # Count how many tokens are ahead in queue (both waiting AND serving - they are all ahead of this customer)
     ahead = db.query(Token).filter(
-        Token.status == TokenStatus.waiting,
+        Token.status.in_([TokenStatus.waiting, TokenStatus.serving]),
         Token.issued_at < token.issued_at,
     ).count()
 
@@ -204,7 +204,7 @@ def get_queue_status(token_id: str, db: Session = Depends(get_db)):
         # Prefer a configured counters count (production), but never lower than currently serving.
         servers = max(1, int(getattr(settings, "COUNTERS_COUNT", 1)), len(serving_tokens))
 
-        # Remaining work in front of this customer.
+        # Remaining work in front of this customer (only from serving tokens - waiting tokens haven't started)
         serving_remaining = sum(_serving_remaining_minutes(t, now) for t in serving_tokens)
 
         waiting_ahead = (
@@ -238,14 +238,47 @@ def update_service_time(token_id: str, body: UpdateTimeRequest, db: Session = De
     token = db.query(Token).filter((Token.id == token_id) | (Token.token_number == token_id)).first()
     if not token:
         raise HTTPException(status_code=404, detail="Token not found")
-    
+
     if token.status != TokenStatus.serving:
         raise HTTPException(status_code=400, detail="Can only update time for serving tokens")
-    
+
     token.estimated_minutes = body.estimated_minutes
     if body.issue_description:
         token.issue_description = body.issue_description
-    
+
     db.commit()
     db.refresh(token)
     return token
+
+
+# In-memory counter management (can be moved to database for persistence)
+_counters_config = {
+    "total_counters": 5,  # Default total counters available
+    "active_counters": 0,  # Will be calculated from serving tokens
+}
+
+
+@router.get("/counters/config")
+def get_counters_config(db: Session = Depends(get_db)):
+    """Get current counter configuration (total and active)."""
+    serving = db.query(Token).filter(Token.status == TokenStatus.serving).count()
+    return {
+        "total_counters": _counters_config["total_counters"],
+        "active_counters": serving,
+        "available_counters": max(0, _counters_config["total_counters"] - serving),
+    }
+
+
+@router.post("/counters/config")
+def set_counters_config(total_counters: int):
+    """Set total number of counters available in the branch."""
+    if total_counters < 1:
+        raise HTTPException(status_code=400, detail="Must have at least 1 counter")
+    if total_counters > 20:
+        raise HTTPException(status_code=400, detail="Maximum 20 counters allowed")
+
+    _counters_config["total_counters"] = total_counters
+    return {
+        "total_counters": _counters_config["total_counters"],
+        "message": f"Total counters set to {total_counters}",
+    }
