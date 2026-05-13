@@ -4,15 +4,17 @@ import base64
 import gc
 import io
 import logging
+import random
 import threading
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
-from sqlalchemy.orm import Session
-from PIL import Image
-import numpy as np
 import cv2
+import numpy as np
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from PIL import Image
+from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.models import CrowdCount
 from app.schemas import CrowdAnalyzeOut
@@ -20,19 +22,16 @@ from app.schemas import CrowdAnalyzeOut
 router = APIRouter(prefix="/crowd", tags=["Crowd"])
 logger = logging.getLogger(__name__)
 
-# Lazy-load YOLO (single-flight: parallel /health + /analyze used to double-download and OOM Render)
+# Lazy-load Ultralytics YOLO only when YOLO_MODE=ultralytics
 _model = None
 _model_error: str | None = None
 _model_lock = threading.Lock()
 _warm_started = False
 _warm_lock = threading.Lock()
 
-# Only one predict() at a time — overlapping Ultralytics runs spike RAM on small hosts
 _predict_lock = threading.Lock()
 
-# Smaller imgsz keeps CPU/RAM lower on Render free/small instances
 _YOLO_IMGSZ = 320
-# Downscale huge camera frames before inference
 _MAX_INPUT_SIDE = 960
 
 
@@ -47,7 +46,9 @@ def _downscale_bgr(img: np.ndarray) -> np.ndarray:
 
 
 def start_background_yolo_warm() -> None:
-    """Call once at app startup so the model loads off the hot request path."""
+    """Warm real YOLO only when configured; hog/demo skip PyTorch entirely."""
+    if settings.YOLO_MODE != "ultralytics":
+        return
     _schedule_background_warm()
 
 
@@ -81,7 +82,6 @@ def _get_model():
             raise HTTPException(status_code=503, detail=f"YOLO model not available: {_model_error}")
         try:
             from ultralytics import YOLO
-            from app.config import settings
             import os
 
             logger.info(f"[YOLO] Loading model from: {settings.YOLO_MODEL_PATH}")
@@ -138,14 +138,147 @@ def _get_model():
     return _model
 
 
+def _hog_people_detect(img_bgr: np.ndarray) -> tuple[int, list[dict[str, object]], np.ndarray]:
+    """OpenCV HOG pedestrian detector — CPU only, no PyTorch; good enough for demos on small hosts."""
+    out = img_bgr.copy()
+    hog = cv2.HOGDescriptor()
+    hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+    rects, weights = hog.detectMultiScale(out, winStride=(8, 8), padding=(8, 8), scale=1.05)
+    detections: list[dict[str, object]] = []
+    for i, (x, y, w, h) in enumerate(rects):
+        x1, y1, x2, y2 = int(x), int(y), int(x + w), int(y + h)
+        raw_w = float(weights[i][0]) if len(weights) > i and len(weights[i]) > 0 else 0.5
+        conf = float(min(0.99, max(0.25, abs(raw_w) / 3.0)))
+        detections.append({"box": [x1, y1, x2, y2], "confidence": round(conf, 2)})
+        cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        label = f"Person {conf:.2f}"
+        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+        cv2.rectangle(
+            out,
+            (x1, y1 - label_size[1] - 10),
+            (x1 + label_size[0], y1),
+            (0, 255, 0),
+            -1,
+        )
+        cv2.putText(out, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+    return len(detections), detections, out
+
+
+def _demo_detect(img_bgr: np.ndarray) -> tuple[int, list[dict[str, object]], np.ndarray]:
+    """Placeholder boxes — always succeeds (for worst-case hosting)."""
+    out = img_bgr.copy()
+    h, w = out.shape[:2]
+    n = random.randint(0, min(3, max(1, w // 120)))
+    detections: list[dict[str, object]] = []
+    for _ in range(n):
+        bw, bh = max(40, w // 6), max(80, h // 4)
+        x1 = random.randint(0, max(0, w - bw))
+        y1 = random.randint(0, max(0, h - bh))
+        x2, y2 = x1 + bw, y1 + bh
+        conf = round(random.uniform(0.35, 0.85), 2)
+        detections.append({"box": [x1, y1, x2, y2], "confidence": conf})
+        cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    cv2.putText(
+        out,
+        "YOLO demo",
+        (10, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 200, 255),
+        2,
+    )
+    return len(detections), detections, out
+
+
+def _run_ultralytics(frame_bgr: np.ndarray) -> tuple[int, list[dict[str, object]], np.ndarray]:
+    import torch
+
+    model = _get_model()
+    out = frame_bgr.copy()
+    results = None
+    try:
+        with _predict_lock:
+            with torch.inference_mode():
+                results = model.predict(
+                    out,
+                    verbose=False,
+                    conf=0.25,
+                    iou=0.45,
+                    classes=[0],
+                    device="cpu",
+                    imgsz=_YOLO_IMGSZ,
+                )
+        count = 0
+        detections: list[dict[str, object]] = []
+        for r in results:
+            for box in r.boxes:
+                cls_id = int(box.cls[0])
+                conf = float(box.conf[0])
+                if cls_id == 0 and conf >= 0.25:
+                    count += 1
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    detections.append({"box": [x1, y1, x2, y2], "confidence": round(conf, 2)})
+                    cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    label = f"Person {conf:.2f}"
+                    label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+                    cv2.rectangle(
+                        out,
+                        (x1, y1 - label_size[1] - 10),
+                        (x1 + label_size[0], y1),
+                        (0, 255, 0),
+                        -1,
+                    )
+                    cv2.putText(out, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+        return count, detections, out
+    finally:
+        if results is not None:
+            del results
+        gc.collect(0)
+
+
+def _finalize_analyze(frame_bgr_drawn: np.ndarray, count: int, detections: list, db: Session) -> dict:
+    frame_rgb = cv2.cvtColor(frame_bgr_drawn, cv2.COLOR_BGR2RGB)
+    annotated_image = Image.fromarray(frame_rgb)
+    buffered = io.BytesIO()
+    annotated_image.save(buffered, format="JPEG", quality=85)
+    img_base64 = base64.b64encode(buffered.getvalue()).decode()
+
+    record = CrowdCount(count=count, timestamp=datetime.utcnow())
+    db.add(record)
+    db.commit()
+
+    return {
+        "count": count,
+        "image": f"data:image/jpeg;base64,{img_base64}",
+        "detections": detections,
+    }
+
+
 @router.get("/health")
 def crowd_health_check():
-    """Fast status only — never blocks on model download (that was killing the worker + CORS)."""
+    mode = settings.YOLO_MODE
+    if mode == "demo":
+        return {
+            "status": "healthy",
+            "model_loaded": True,
+            "model_classes": ["person"],
+            "inference_backend": "demo",
+        }
+    if mode == "hog":
+        return {
+            "status": "healthy",
+            "model_loaded": True,
+            "model_classes": ["person"],
+            "inference_backend": "opencv_hog",
+        }
+
+    # ultralytics
     if _model_error:
         return {
             "status": "unhealthy",
             "model_loaded": False,
             "error": _model_error,
+            "inference_backend": "ultralytics",
         }
     if _model is not None:
         m = _model
@@ -153,18 +286,19 @@ def crowd_health_check():
             "status": "healthy",
             "model_loaded": True,
             "model_classes": list(m.names.values()) if hasattr(m, "names") else [],
+            "inference_backend": "ultralytics",
         }
     _schedule_background_warm()
     return {
         "status": "pending",
         "model_loaded": False,
-        "message": "Model loading in background; wait ~1–2 min on first deploy then retry health or analyze.",
+        "message": "Model loading in background; wait ~1–2 min on first deploy then retry.",
+        "inference_backend": "ultralytics",
     }
 
 
 @router.get("/count")
 def get_live_count(db: Session = Depends(get_db)):
-    """Get latest crowd count, but only if it's recent (within last 5 minutes)"""
     cutoff = datetime.utcnow() - timedelta(minutes=5)
 
     latest = (
@@ -182,8 +316,9 @@ def get_live_count(db: Session = Depends(get_db)):
 
 @router.post("/analyze", response_model=CrowdAnalyzeOut)
 async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """Upload an image frame → YOLO detects people → returns count + annotated image."""
-    logger.info(f"[YOLO] Analyze request received: filename={file.filename}, content_type={file.content_type}")
+    logger.info(
+        f"[YOLO] Analyze mode={settings.YOLO_MODE} file={file.filename} content_type={file.content_type}"
+    )
 
     try:
         contents = await file.read()
@@ -224,91 +359,24 @@ async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_
         del frame_bgr
     frame_bgr = infer_bgr
 
-    results = None
+    mode = settings.YOLO_MODE
     try:
-        import torch
-
-        model = _get_model()
-        logger.info(f"Running YOLO inference on frame shape: {frame_bgr.shape} (BGR)")
-        with _predict_lock:
-            with torch.inference_mode():
-                results = model.predict(
-                    frame_bgr,
-                    verbose=False,
-                    conf=0.25,
-                    iou=0.45,
-                    classes=[0],
-                    device="cpu",
-                    imgsz=_YOLO_IMGSZ,
-                )
-        logger.info(f"YOLO inference completed, processing {len(results)} result(s)")
-
-        count = 0
-        detections = []
-
-        for r in results:
-            logger.debug(f"Result boxes: {len(r.boxes)}")
-            for box in r.boxes:
-                cls_id = int(box.cls[0])
-                conf = float(box.conf[0])
-
-                if cls_id == 0 and conf >= 0.25:
-                    count += 1
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-
-                    detections.append(
-                        {
-                            "box": [x1, y1, x2, y2],
-                            "confidence": round(conf, 2),
-                        }
-                    )
-
-                    cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-                    label = f"Person {conf:.2f}"
-                    label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
-                    cv2.rectangle(
-                        frame_bgr,
-                        (x1, y1 - label_size[1] - 10),
-                        (x1 + label_size[0], y1),
-                        (0, 255, 0),
-                        -1,
-                    )
-                    cv2.putText(frame_bgr, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-
-        logger.info(f"Detection complete: {count} person(s) found with {len(detections)} detection record(s)")
-        if count == 0:
-            logger.info("No people detected in frame")
-
-        frame_annotated = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        if mode == "demo":
+            count, detections, drawn = _demo_detect(frame_bgr)
+        elif mode == "hog":
+            count, detections, drawn = _hog_people_detect(frame_bgr)
+        else:
+            count, detections, drawn = _run_ultralytics(frame_bgr)
         del frame_bgr
-
-        annotated_image = Image.fromarray(frame_annotated)
-        buffered = io.BytesIO()
-        annotated_image.save(buffered, format="JPEG", quality=85)
-        img_base64 = base64.b64encode(buffered.getvalue()).decode()
-        del annotated_image
-        del buffered
-        del frame_annotated
-
-        record = CrowdCount(count=count, timestamp=datetime.utcnow())
-        db.add(record)
-        db.commit()
-
-        return {
-            "count": count,
-            "image": f"data:image/jpeg;base64,{img_base64}",
-            "detections": detections,
-        }
+        logger.info(f"[YOLO] {mode} complete: count={count}")
+        return _finalize_analyze(drawn, count, detections, db)
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"YOLO inference failed: {e}")
+        logger.error(f"[YOLO] analyze failed ({mode}): {e}")
         import traceback
 
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"YOLO analysis failed: {str(e)}")
     finally:
-        if results is not None:
-            del results
         gc.collect(0)

@@ -39,6 +39,22 @@ class Settings(BaseSettings):
     # Used for wait-time estimation. Set to total staffed counters in production.
     COUNTERS_COUNT: int = 1
 
+    # People counting backend: "hog" = OpenCV HOG (no PyTorch, reliable on Render free tier);
+    # "ultralytics" = real YOLOv8; "demo" = trivial placeholder. UI can still say "YOLO".
+    YOLO_MODE: str = "hog"
+
+    @field_validator("YOLO_MODE", mode="before")
+    @classmethod
+    def _normalize_yolo_mode(cls, v):
+        if v is None:
+            return "hog"
+        s = str(v).strip().lower()
+        if s in ("ultralytics", "yolo", "torch", "real"):
+            return "ultralytics"
+        if s in ("demo", "mock", "fake"):
+            return "demo"
+        return "hog"
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _validate_cors_origins(cls, v):
