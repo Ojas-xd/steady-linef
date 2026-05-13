@@ -349,19 +349,6 @@ def crowd_health_check():
             "model_classes": ["person"],
             "inference_backend": "opencv_hog",
         }
-    if mode == "replicate":
-        has_token = bool((settings.REPLICATE_API_TOKEN or "").strip())
-        return {
-            "status": "healthy",
-            "model_loaded": True,
-            "model_classes": ["person"],
-            "inference_backend": "replicate" if has_token else "opencv_hog_fallback",
-            "message": (
-                None
-                if has_token
-                else "Add REPLICATE_API_TOKEN on Render for hosted YOLOv8; until then analyze uses HOG."
-            ),
-        }
 
     # ultralytics
     if _model_error:
@@ -469,19 +456,6 @@ async def analyze_frame(
             count, detections, drawn = _demo_detect(frame_bgr)
         elif mode == "hog":
             count, detections, drawn = _hog_people_detect(frame_bgr)
-        elif mode == "replicate":
-            tok = (settings.REPLICATE_API_TOKEN or "").strip()
-            if not tok:
-                logger.warning("[YOLO] replicate mode but REPLICATE_API_TOKEN empty — using HOG")
-                count, detections, drawn = _hog_people_detect(frame_bgr)
-            else:
-                from app.replicate_yolo import run_replicate_yolov8
-
-                try:
-                    count, detections, drawn = run_replicate_yolov8(frame_bgr, tok)
-                except Exception as rep_e:
-                    logger.warning("[YOLO] Replicate call failed, using HOG: %s", rep_e)
-                    count, detections, drawn = _hog_people_detect(frame_bgr)
         else:
             count, detections, drawn = _run_ultralytics(frame_bgr)
         del frame_bgr

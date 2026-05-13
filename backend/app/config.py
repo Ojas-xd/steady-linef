@@ -39,14 +39,8 @@ class Settings(BaseSettings):
     # Used for wait-time estimation. Set to total staffed counters in production.
     COUNTERS_COUNT: int = 1
 
-    # People counting: hog | ultralytics | demo | replicate (Replicate = hosted YOLOv8, needs token)
+    # People counting: hog | ultralytics | demo (separate YOLO-only service can be added later via env if needed)
     YOLO_MODE: str = "hog"
-
-    # Replicate (https://replicate.com) — free starter credits; real YOLOv8 without loading torch on Render
-    REPLICATE_API_TOKEN: str = ""
-    REPLICATE_MODEL_OWNER: str = "muqtadar08"
-    REPLICATE_MODEL_NAME: str = "yolov8"
-    REPLICATE_YOLO_VARIANT: str = "yolov8-n"
 
     @field_validator("YOLO_MODE", mode="before")
     @classmethod
@@ -58,8 +52,7 @@ class Settings(BaseSettings):
             return "ultralytics"
         if s in ("demo", "mock", "fake"):
             return "demo"
-        if s in ("replicate", "cloud", "hosted", "api"):
-            return "replicate"
+        # legacy / mistaken values (e.g. old "replicate") → safe default
         return "hog"
 
     @field_validator("CORS_ORIGINS", mode="before")
