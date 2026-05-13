@@ -71,6 +71,9 @@ const CameraPage = () => {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
     setCameraActive(false);
   };
 
@@ -78,10 +81,13 @@ const CameraPage = () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+      const el = videoRef.current;
+      if (!el) {
+        stream.getTracks().forEach((t) => t.stop());
+        throw new Error("Video element not mounted");
       }
+      el.srcObject = stream;
+      await el.play();
       setShowAnnotated(false);
       setCameraError(null);
       setCameraActive(true);
@@ -122,12 +128,23 @@ const CameraPage = () => {
     });
   };
 
+  const waitOneVideoFrame = (video: HTMLVideoElement): Promise<void> =>
+    new Promise((resolve) => {
+      if (typeof video.requestVideoFrameCallback === "function") {
+        video.requestVideoFrameCallback(() => resolve());
+      } else {
+        requestAnimationFrame(() => resolve());
+      }
+    });
+
   const captureFrame = async (): Promise<Blob | null> => {
     const video = videoRef.current;
     if (!video || !cameraActive) return null;
 
     const dimsOk = await waitForVideoDimensions(video);
     if (!dimsOk || !video.videoWidth || !video.videoHeight) return null;
+
+    await waitOneVideoFrame(video);
 
     const canvas = document.createElement("canvas");
     const originalWidth = video.videoWidth;
@@ -145,7 +162,26 @@ const CameraPage = () => {
     }
 
     return await new Promise((resolve) => {
-      canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.8);
+      canvas.toBlob(
+        (blob) => {
+          if (blob) resolve(blob);
+          else {
+            try {
+              const data = canvas.toDataURL("image/jpeg", 0.85);
+              const arr = data.split(",");
+              const mime = arr[0].match(/:(.*?);/)?.[1] ?? "image/jpeg";
+              const bstr = atob(arr[1] ?? "");
+              const u8 = new Uint8Array(bstr.length);
+              for (let i = 0; i < bstr.length; i++) u8[i] = bstr.charCodeAt(i);
+              resolve(new Blob([u8], { type: mime }));
+            } catch {
+              resolve(null);
+            }
+          }
+        },
+        "image/jpeg",
+        0.8
+      );
     });
   };
 
@@ -196,14 +232,16 @@ const CameraPage = () => {
       return;
     }
 
+    let firstTimer: number | null = null;
     const runAnalysis = () => {
       void captureAndAnalyze();
     };
 
-    runAnalysis();
+    firstTimer = window.setTimeout(runAnalysis, 400);
     analysisTimerRef.current = window.setInterval(runAnalysis, 3000);
 
     return () => {
+      if (firstTimer !== null) window.clearTimeout(firstTimer);
       if (analysisTimerRef.current !== null) {
         window.clearInterval(analysisTimerRef.current);
         analysisTimerRef.current = null;
@@ -334,16 +372,14 @@ const CameraPage = () => {
           )}
 
           <div className="rounded-[2rem] overflow-hidden border border-border/70 bg-black/5 mb-4 relative h-[420px] w-full">
-            {cameraActive && (
-              <video
-                ref={videoRef}
-                className={`absolute inset-0 z-0 h-full w-full object-contain bg-black pointer-events-none ${
-                  annotatedImage && showAnnotated ? "opacity-0" : "opacity-100"
-                }`}
-                muted
-                playsInline
-              />
-            )}
+            <video
+              ref={videoRef}
+              className={`absolute inset-0 z-0 h-full w-full object-contain bg-black pointer-events-none transition-opacity ${
+                !cameraActive ? "opacity-0" : annotatedImage && showAnnotated ? "opacity-0" : "opacity-100"
+              }`}
+              muted
+              playsInline
+            />
             {annotatedImage && showAnnotated && (
               <img
                 src={annotatedImage}
