@@ -39,9 +39,14 @@ class Settings(BaseSettings):
     # Used for wait-time estimation. Set to total staffed counters in production.
     COUNTERS_COUNT: int = 1
 
-    # People counting backend: "hog" = OpenCV HOG (no PyTorch, reliable on Render free tier);
-    # "ultralytics" = real YOLOv8; "demo" = trivial placeholder. UI can still say "YOLO".
+    # People counting: hog | ultralytics | demo | replicate (Replicate = hosted YOLOv8, needs token)
     YOLO_MODE: str = "hog"
+
+    # Replicate (https://replicate.com) — free starter credits; real YOLOv8 without loading torch on Render
+    REPLICATE_API_TOKEN: str = ""
+    REPLICATE_MODEL_OWNER: str = "muqtadar08"
+    REPLICATE_MODEL_NAME: str = "yolov8"
+    REPLICATE_YOLO_VARIANT: str = "yolov8-n"
 
     @field_validator("YOLO_MODE", mode="before")
     @classmethod
@@ -53,6 +58,8 @@ class Settings(BaseSettings):
             return "ultralytics"
         if s in ("demo", "mock", "fake"):
             return "demo"
+        if s in ("replicate", "cloud", "hosted", "api"):
+            return "replicate"
         return "hog"
 
     @field_validator("CORS_ORIGINS", mode="before")

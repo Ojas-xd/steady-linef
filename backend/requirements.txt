@@ -11,6 +11,7 @@ ultralytics==8.2.100
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
 pillow==10.4.0
+httpx==0.27.2
 prophet==1.1.6
 pandas==2.2.3
 psycopg2-binary==2.9.9
