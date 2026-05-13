@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from PIL import Image
 from sqlalchemy.orm import Session
 
@@ -236,7 +236,84 @@ def _run_ultralytics(frame_bgr: np.ndarray) -> tuple[int, list[dict[str, object]
         gc.collect(0)
 
 
-def _finalize_analyze(frame_bgr_drawn: np.ndarray, count: int, detections: list, db: Session) -> dict:
+def _parse_roi_optional_strings(
+    roi_x: str | None, roi_y: str | None, roi_w: str | None, roi_h: str | None
+) -> tuple[float, float, float, float] | None:
+    def _empty(v: str | None) -> bool:
+        return v is None or (isinstance(v, str) and not str(v).strip())
+
+    if all(_empty(v) for v in (roi_x, roi_y, roi_w, roi_h)):
+        return None
+    if any(_empty(v) for v in (roi_x, roi_y, roi_w, roi_h)):
+        raise HTTPException(
+            status_code=400,
+            detail="Queue zone requires all four fields: roi_x, roi_y, roi_w, roi_h (0-1 normalized to image).",
+        )
+    try:
+        rx, ry, rw, rh = float(str(roi_x).strip()), float(str(roi_y).strip()), float(str(roi_w).strip()), float(str(roi_h).strip())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ROI values must be numbers") from None
+    if rw <= 0 or rh <= 0:
+        raise HTTPException(status_code=400, detail="roi_w and roi_h must be positive")
+    if rx < 0 or ry < 0 or rx >= 1 or ry >= 1:
+        raise HTTPException(status_code=400, detail="roi_x and roi_y must be in [0, 1)")
+    if rx + rw > 1.001 or ry + rh > 1.001:
+        raise HTTPException(status_code=400, detail="ROI must fit inside the image")
+    return (rx, ry, min(rw, 1.0 - rx), min(rh, 1.0 - ry))
+
+
+def _apply_queue_zone(
+    drawn_bgr: np.ndarray,
+    detections: list[dict[str, object]],
+    roi: tuple[float, float, float, float],
+) -> tuple[np.ndarray, list[dict[str, object]], int]:
+    """Keep detections whose box center lies inside normalized ROI; draw yellow queue rectangle."""
+    h, w = drawn_bgr.shape[:2]
+    rx, ry, rw, rh = roi
+    x1 = int(rx * w)
+    y1 = int(ry * h)
+    x2 = int((rx + rw) * w)
+    y2 = int((ry + rh) * h)
+    x2 = max(x1 + 2, min(w, x2))
+    y2 = max(y1 + 2, min(h, y2))
+
+    filtered: list[dict[str, object]] = []
+    for d in detections:
+        box = d.get("box")
+        if not (isinstance(box, list) and len(box) >= 4):
+            continue
+        bx1, by1, bx2, by2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+        cx = 0.5 * (bx1 + bx2)
+        cy = 0.5 * (by1 + by2)
+        if x1 <= cx <= x2 and y1 <= cy <= y2:
+            filtered.append(d)
+
+    vis = drawn_bgr.copy()
+    cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 255), 2)
+    cv2.putText(
+        vis,
+        "Queue zone",
+        (x1, max(20, y1 - 6)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (0, 255, 255),
+        2,
+    )
+    cv2.putText(
+        vis,
+        f"In zone: {len(filtered)}",
+        (10, 28),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (0, 255, 255),
+        2,
+    )
+    return vis, filtered, len(filtered)
+
+
+def _finalize_analyze(
+    frame_bgr_drawn: np.ndarray, count: int, detections: list, db: Session, *, queue_zone_applied: bool
+) -> dict:
     frame_rgb = cv2.cvtColor(frame_bgr_drawn, cv2.COLOR_BGR2RGB)
     annotated_image = Image.fromarray(frame_rgb)
     buffered = io.BytesIO()
@@ -251,6 +328,7 @@ def _finalize_analyze(frame_bgr_drawn: np.ndarray, count: int, detections: list,
         "count": count,
         "image": f"data:image/jpeg;base64,{img_base64}",
         "detections": detections,
+        "queue_zone_applied": queue_zone_applied,
     }
 
 
@@ -328,10 +406,23 @@ def get_live_count(db: Session = Depends(get_db)):
 
 
 @router.post("/analyze", response_model=CrowdAnalyzeOut)
-async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def analyze_frame(
+    file: UploadFile = File(...),
+    roi_x: str | None = Form(default=None),
+    roi_y: str | None = Form(default=None),
+    roi_w: str | None = Form(default=None),
+    roi_h: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
     logger.info(
         f"[YOLO] Analyze mode={settings.YOLO_MODE} file={file.filename} content_type={file.content_type}"
     )
+
+    roi_norm: tuple[float, float, float, float] | None = None
+    try:
+        roi_norm = _parse_roi_optional_strings(roi_x, roi_y, roi_w, roi_h)
+    except HTTPException:
+        raise
 
     try:
         contents = await file.read()
@@ -395,7 +486,11 @@ async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_
             count, detections, drawn = _run_ultralytics(frame_bgr)
         del frame_bgr
         logger.info(f"[YOLO] {mode} complete: count={count}")
-        return _finalize_analyze(drawn, count, detections, db)
+        if roi_norm is not None:
+            drawn, detections, count = _apply_queue_zone(drawn, detections, roi_norm)
+        return _finalize_analyze(
+            drawn, count, detections, db, queue_zone_applied=roi_norm is not None
+        )
     except HTTPException:
         raise
     except Exception as e:

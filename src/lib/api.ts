@@ -315,10 +315,24 @@ export const crowdApi = {
     return res.data;
   },
 
-  /** Upload a frame for YOLO analysis */
-  analyzeFrame: async (imageFile: File): Promise<{ count: number; image?: string; detections?: Array<{ box: number[]; confidence: number }> }> => {
+  /** Upload a frame for YOLO analysis. Optional `roi`: normalized 0–1 queue zone (x, y, width, height). */
+  analyzeFrame: async (
+    imageFile: File,
+    roi?: { x: number; y: number; w: number; h: number } | null
+  ): Promise<{
+    count: number;
+    image?: string;
+    detections?: Array<{ box: number[]; confidence: number }>;
+    queue_zone_applied?: boolean;
+  }> => {
     const formData = new FormData();
     formData.append("file", imageFile);
+    if (roi && roi.w > 0 && roi.h > 0) {
+      formData.append("roi_x", String(roi.x));
+      formData.append("roi_y", String(roi.y));
+      formData.append("roi_w", String(roi.w));
+      formData.append("roi_h", String(roi.h));
+    }
 
     // Use fetch here (jugaad): axios instance defaults to Content-Type: application/json,
     // which can break multipart uploads in production; fetch leaves the boundary to the browser.
@@ -337,7 +351,14 @@ export const crowdApi = {
       throw new Error("No response from server. Check if backend is running.");
     }
 
-    let data: { detail?: unknown; message?: unknown; count?: number; image?: string; detections?: Array<{ box: number[]; confidence: number }> } = {};
+    let data: {
+      detail?: unknown;
+      message?: unknown;
+      count?: number;
+      image?: string;
+      detections?: Array<{ box: number[]; confidence: number }>;
+      queue_zone_applied?: boolean;
+    } = {};
     try {
       data = await res.json();
     } catch {
@@ -364,6 +385,7 @@ export const crowdApi = {
       count: data.count ?? 0,
       image: data.image,
       detections: data.detections,
+      queue_zone_applied: data.queue_zone_applied,
     };
   },
 };

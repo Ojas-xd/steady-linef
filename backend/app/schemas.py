@@ -128,3 +128,4 @@ class CrowdAnalyzeOut(BaseModel):
     count: int
     image: str  # base64 encoded image
     detections: list[DetectionBox]
+    queue_zone_applied: bool = False

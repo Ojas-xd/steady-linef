@@ -1,7 +1,26 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import LiveClock from "@/components/LiveClock";
-import { Camera, Zap, Activity } from "lucide-react";
+import { Camera, Zap, Activity, SquareDashed } from "lucide-react";
 import { crowdApi } from "@/lib/api";
+
+/** Map pointer to normalized [0,1] coords in actual video pixels (handles letterboxing with object-contain). */
+function clientToNormVideo(clientX: number, clientY: number, video: HTMLVideoElement): { nx: number; ny: number } | null {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (!vw || !vh) return null;
+  const rect = video.getBoundingClientRect();
+  const scale = Math.min(rect.width / vw, rect.height / vh);
+  const dispW = vw * scale;
+  const dispH = vh * scale;
+  const offX = rect.left + (rect.width - dispW) / 2;
+  const offY = rect.top + (rect.height - dispH) / 2;
+  const mx = clientX - offX;
+  const my = clientY - offY;
+  const nx = mx / dispW;
+  const ny = my / dispH;
+  if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return null;
+  return { nx, ny };
+}
 
 const CameraPage = () => {
   const [cameraActive, setCameraActive] = useState(false);
@@ -19,6 +38,11 @@ const CameraPage = () => {
     message?: string;
   } | null>(null);
   const [isCheckingHealth, setIsCheckingHealth] = useState(false);
+  const [queueZoneDraw, setQueueZoneDraw] = useState(false);
+  const [roiNorm, setRoiNorm] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [zoneDragStart, setZoneDragStart] = useState<{ nx: number; ny: number } | null>(null);
+  const [zoneDragCurrent, setZoneDragCurrent] = useState<{ nx: number; ny: number } | null>(null);
+  const [queueZoneAppliedLast, setQueueZoneAppliedLast] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const analysisTimerRef = useRef<number | null>(null);
@@ -85,21 +109,29 @@ const CameraPage = () => {
     });
   };
 
-  const captureAndAnalyze = async () => {
-    if (!cameraActive || isAnalyzing) {
-      setCameraError("Start the camera first before analyzing a frame.");
+  const analyzeLockRef = useRef(false);
+
+  const captureAndAnalyze = useCallback(async () => {
+    if (!cameraActive || analyzeLockRef.current) {
+      if (!cameraActive) setCameraError("Start the camera first before analyzing a frame.");
       return;
     }
 
+    analyzeLockRef.current = true;
     setIsAnalyzing(true);
     try {
       const blob = await captureFrame();
       if (!blob) throw new Error("Camera frame is not ready.");
       const file = new File([blob], "frame.jpg", { type: "image/jpeg" });
-      const result = await crowdApi.analyzeFrame(file);
+      const roi =
+        roiNorm && roiNorm.w > 0.03 && roiNorm.h > 0.03
+          ? roiNorm
+          : null;
+      const result = await crowdApi.analyzeFrame(file, roi);
       setAnalysisCount(result.count);
       setAnnotatedImage(result.image || null);
       setDetections(result.detections || []);
+      setQueueZoneAppliedLast(Boolean(result.queue_zone_applied));
       setCameraError(null);
     } catch (error) {
       console.error("YOLO analysis failed", error);
@@ -107,9 +139,10 @@ const CameraPage = () => {
         error instanceof Error ? error.message : "Unable to analyze the camera frame. Try again.";
       setCameraError(message);
     } finally {
+      analyzeLockRef.current = false;
       setIsAnalyzing(false);
     }
-  };
+  }, [cameraActive, roiNorm]);
 
   useEffect(() => {
     if (!cameraActive || !autoAnalyzeEnabled) {
@@ -133,7 +166,67 @@ const CameraPage = () => {
         analysisTimerRef.current = null;
       }
     };
-  }, [cameraActive, autoAnalyzeEnabled]);
+  }, [cameraActive, autoAnalyzeEnabled, captureAndAnalyze]);
+
+  const onZonePointerDown = (e: React.MouseEvent) => {
+    if (!queueZoneDraw || !videoRef.current) return;
+    const p = clientToNormVideo(e.clientX, e.clientY, videoRef.current);
+    if (!p) return;
+    e.preventDefault();
+    setZoneDragStart(p);
+    setZoneDragCurrent(p);
+  };
+
+  const onZonePointerMove = (e: React.MouseEvent) => {
+    if (!zoneDragStart || !videoRef.current) return;
+    const p = clientToNormVideo(e.clientX, e.clientY, videoRef.current);
+    if (p) setZoneDragCurrent(p);
+  };
+
+  const finishZoneDrag = () => {
+    if (!zoneDragStart || !zoneDragCurrent) {
+      setZoneDragStart(null);
+      setZoneDragCurrent(null);
+      return;
+    }
+    const x1 = zoneDragStart.nx;
+    const y1 = zoneDragStart.ny;
+    const x2 = zoneDragCurrent.nx;
+    const y2 = zoneDragCurrent.ny;
+    const x = Math.min(x1, x2);
+    const y = Math.min(y1, y2);
+    const w = Math.abs(x2 - x1);
+    const h = Math.abs(y2 - y1);
+    if (w > 0.03 && h > 0.03) {
+      setRoiNorm({
+        x: Math.max(0, Math.min(1 - w, x)),
+        y: Math.max(0, Math.min(1 - h, y)),
+        w: Math.min(w, 1),
+        h: Math.min(h, 1),
+      });
+    }
+    setZoneDragStart(null);
+    setZoneDragCurrent(null);
+  };
+
+  const previewRect = (): { left: number; top: number; width: number; height: number } | null => {
+    if (!zoneDragStart || !zoneDragCurrent) return null;
+    const x = Math.min(zoneDragStart.nx, zoneDragCurrent.nx);
+    const y = Math.min(zoneDragStart.ny, zoneDragCurrent.ny);
+    const w = Math.abs(zoneDragCurrent.nx - zoneDragStart.nx);
+    const h = Math.abs(zoneDragCurrent.ny - zoneDragStart.ny);
+    return { left: x * 100, top: y * 100, width: w * 100, height: h * 100 };
+  };
+
+  const roiOverlayStyle = (): { left: string; top: string; width: string; height: string } | null => {
+    if (!roiNorm) return null;
+    return {
+      left: `${roiNorm.x * 100}%`,
+      top: `${roiNorm.y * 100}%`,
+      width: `${roiNorm.w * 100}%`,
+      height: `${roiNorm.h * 100}%`,
+    };
+  };
 
   useEffect(() => {
     return () => {
@@ -197,15 +290,49 @@ const CameraPage = () => {
             </div>
           )}
 
-          <div className="rounded-[2rem] overflow-hidden border border-border/70 bg-black/5 mb-4 relative">
+          <div className="rounded-[2rem] overflow-hidden border border-border/70 bg-black/5 mb-4 relative h-[420px] w-full">
             {annotatedImage && showAnnotated ? (
-              <img 
-                src={annotatedImage} 
-                alt="YOLO detections" 
-                className="w-full h-[420px] object-contain bg-black"
+              <img
+                src={annotatedImage}
+                alt="YOLO detections"
+                className="w-full h-full object-contain bg-black"
               />
             ) : (
-              <video ref={videoRef} className="w-full h-[420px] object-cover bg-black" muted playsInline />
+              <>
+                <video
+                  ref={videoRef}
+                  className="w-full h-full object-contain bg-black pointer-events-none"
+                  muted
+                  playsInline
+                />
+                {cameraActive && !showAnnotated && (
+                  <div
+                    className={`absolute inset-0 z-10 ${queueZoneDraw ? "cursor-crosshair touch-none" : "pointer-events-none"}`}
+                    onMouseDown={queueZoneDraw ? onZonePointerDown : undefined}
+                    onMouseMove={queueZoneDraw ? onZonePointerMove : undefined}
+                    onMouseUp={queueZoneDraw ? finishZoneDrag : undefined}
+                    onMouseLeave={queueZoneDraw ? finishZoneDrag : undefined}
+                  >
+                    {queueZoneDraw && previewRect() && (
+                      <div
+                        className="absolute border-2 border-amber-400/90 bg-amber-400/15 pointer-events-none"
+                        style={{
+                          left: `${previewRect()!.left}%`,
+                          top: `${previewRect()!.top}%`,
+                          width: `${previewRect()!.width}%`,
+                          height: `${previewRect()!.height}%`,
+                        }}
+                      />
+                    )}
+                    {roiOverlayStyle() && !zoneDragStart && (
+                      <div
+                        className="absolute border-2 border-cyan-400/90 bg-cyan-400/10 pointer-events-none"
+                        style={roiOverlayStyle()!}
+                      />
+                    )}
+                  </div>
+                )}
+              </>
             )}
             {!cameraActive && !annotatedImage && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/40 text-center px-6">
@@ -214,6 +341,38 @@ const CameraPage = () => {
               </div>
             )}
           </div>
+
+          {cameraActive && (
+            <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-border/70 bg-background px-4 py-3">
+              <SquareDashed className="w-4 h-4 text-muted-foreground shrink-0" />
+              <button
+                type="button"
+                onClick={() => setQueueZoneDraw((v) => !v)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  queueZoneDraw ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground"
+                }`}
+              >
+                {queueZoneDraw ? "Drawing zone…" : "Draw queue zone"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRoiNorm(null);
+                  setZoneDragStart(null);
+                  setZoneDragCurrent(null);
+                  setQueueZoneDraw(false);
+                }}
+                className="rounded-lg px-3 py-1.5 text-xs font-semibold border border-border text-foreground hover:bg-secondary/80"
+              >
+                Clear zone
+              </button>
+              {roiNorm && (
+                <p className="text-xs text-muted-foreground max-w-[14rem] sm:max-w-none">
+                  Cyan box = queue area. Count uses people whose box center is inside it.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Health Status */}
           <div className="mb-4 flex items-center justify-between rounded-xl border border-border/70 bg-background px-4 py-3">
@@ -320,7 +479,11 @@ const CameraPage = () => {
           <div className="rounded-[2rem] border border-border/70 bg-background p-6 text-center">
             <p className="text-sm text-muted-foreground uppercase tracking-[0.24em] mb-3">People Count</p>
             <p className="text-6xl font-black text-primary">{analysisCount ?? "--"}</p>
-            <p className="text-sm text-muted-foreground mt-3">YOLOv8 detected people in the current frame</p>
+            <p className="text-sm text-muted-foreground mt-3">
+              {queueZoneAppliedLast
+                ? "People inside your drawn queue zone (detection box center must be inside the zone)."
+                : "Detections across the full frame (draw a queue zone on live camera to count only that area)."}
+            </p>
           </div>
 
           {/* Detection Details */}
