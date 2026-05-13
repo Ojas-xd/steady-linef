@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import io
 import base64
+import gc
+import io
 import logging
 import threading
 from datetime import datetime, timedelta
@@ -26,8 +27,23 @@ _model_lock = threading.Lock()
 _warm_started = False
 _warm_lock = threading.Lock()
 
+# Only one predict() at a time — overlapping Ultralytics runs spike RAM on small hosts
+_predict_lock = threading.Lock()
+
 # Smaller imgsz keeps CPU/RAM lower on Render free/small instances
 _YOLO_IMGSZ = 320
+# Downscale huge camera frames before inference
+_MAX_INPUT_SIDE = 960
+
+
+def _downscale_bgr(img: np.ndarray) -> np.ndarray:
+    h, w = img.shape[:2]
+    m = max(h, w)
+    if m <= _MAX_INPUT_SIDE:
+        return img
+    scale = _MAX_INPUT_SIDE / m
+    nw, nh = int(w * scale), int(h * scale)
+    return cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
 
 
 def start_background_yolo_warm() -> None:
@@ -88,15 +104,21 @@ def _get_model():
                 raise
 
             try:
-                dummy = np.zeros((640, 480, 3), dtype=np.uint8)
+                import torch
+
+                torch.set_num_threads(1)
+                dummy = np.zeros((320, 320, 3), dtype=np.uint8)
                 logger.info("[YOLO] Running warmup inference...")
-                _model_local.predict(
-                    dummy,
-                    verbose=False,
-                    conf=0.25,
-                    device="cpu",
-                    imgsz=_YOLO_IMGSZ,
-                )
+                with _predict_lock:
+                    with torch.inference_mode():
+                        _model_local.predict(
+                            dummy,
+                            verbose=False,
+                            conf=0.25,
+                            device="cpu",
+                            imgsz=_YOLO_IMGSZ,
+                        )
+                del dummy
                 logger.info("[YOLO] Warmup complete. Model ready!")
             except Exception as warmup_err:
                 logger.error(f"[YOLO] Warmup failed: {warmup_err}")
@@ -182,6 +204,9 @@ async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_
 
         logger.info(f"Processing image: shape={frame.shape}, size={len(contents)} bytes")
 
+        image.close()
+        del contents
+
     except HTTPException:
         raise
     except Exception as e:
@@ -192,20 +217,89 @@ async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
     else:
         frame_bgr = frame
+    del frame
 
+    infer_bgr = _downscale_bgr(frame_bgr)
+    if infer_bgr.shape != frame_bgr.shape:
+        del frame_bgr
+    frame_bgr = infer_bgr
+
+    results = None
     try:
+        import torch
+
         model = _get_model()
         logger.info(f"Running YOLO inference on frame shape: {frame_bgr.shape} (BGR)")
-        results = model.predict(
-            frame_bgr,
-            verbose=False,
-            conf=0.25,
-            iou=0.45,
-            classes=[0],
-            device="cpu",
-            imgsz=_YOLO_IMGSZ,
-        )
+        with _predict_lock:
+            with torch.inference_mode():
+                results = model.predict(
+                    frame_bgr,
+                    verbose=False,
+                    conf=0.25,
+                    iou=0.45,
+                    classes=[0],
+                    device="cpu",
+                    imgsz=_YOLO_IMGSZ,
+                )
         logger.info(f"YOLO inference completed, processing {len(results)} result(s)")
+
+        count = 0
+        detections = []
+
+        for r in results:
+            logger.debug(f"Result boxes: {len(r.boxes)}")
+            for box in r.boxes:
+                cls_id = int(box.cls[0])
+                conf = float(box.conf[0])
+
+                if cls_id == 0 and conf >= 0.25:
+                    count += 1
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+                    detections.append(
+                        {
+                            "box": [x1, y1, x2, y2],
+                            "confidence": round(conf, 2),
+                        }
+                    )
+
+                    cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+                    label = f"Person {conf:.2f}"
+                    label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+                    cv2.rectangle(
+                        frame_bgr,
+                        (x1, y1 - label_size[1] - 10),
+                        (x1 + label_size[0], y1),
+                        (0, 255, 0),
+                        -1,
+                    )
+                    cv2.putText(frame_bgr, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+
+        logger.info(f"Detection complete: {count} person(s) found with {len(detections)} detection record(s)")
+        if count == 0:
+            logger.info("No people detected in frame")
+
+        frame_annotated = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        del frame_bgr
+
+        annotated_image = Image.fromarray(frame_annotated)
+        buffered = io.BytesIO()
+        annotated_image.save(buffered, format="JPEG", quality=85)
+        img_base64 = base64.b64encode(buffered.getvalue()).decode()
+        del annotated_image
+        del buffered
+        del frame_annotated
+
+        record = CrowdCount(count=count, timestamp=datetime.utcnow())
+        db.add(record)
+        db.commit()
+
+        return {
+            "count": count,
+            "image": f"data:image/jpeg;base64,{img_base64}",
+            "detections": detections,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -214,51 +308,7 @@ async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_
 
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"YOLO analysis failed: {str(e)}")
-
-    count = 0
-    detections = []
-
-    for r in results:
-        logger.debug(f"Result boxes: {len(r.boxes)}")
-        for box in r.boxes:
-            cls_id = int(box.cls[0])
-            conf = float(box.conf[0])
-
-            if cls_id == 0 and conf >= 0.25:
-                count += 1
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-
-                detections.append(
-                    {
-                        "box": [x1, y1, x2, y2],
-                        "confidence": round(conf, 2),
-                    }
-                )
-
-                cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-                label = f"Person {conf:.2f}"
-                label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
-                cv2.rectangle(frame_bgr, (x1, y1 - label_size[1] - 10), (x1 + label_size[0], y1), (0, 255, 0), -1)
-                cv2.putText(frame_bgr, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-
-    logger.info(f"Detection complete: {count} person(s) found with {len(detections)} detection record(s)")
-    if count == 0:
-        logger.info("No people detected in frame")
-
-    frame_annotated = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-
-    annotated_image = Image.fromarray(frame_annotated)
-    buffered = io.BytesIO()
-    annotated_image.save(buffered, format="JPEG", quality=85)
-    img_base64 = base64.b64encode(buffered.getvalue()).decode()
-
-    record = CrowdCount(count=count, timestamp=datetime.utcnow())
-    db.add(record)
-    db.commit()
-
-    return {
-        "count": count,
-        "image": f"data:image/jpeg;base64,{img_base64}",
-        "detections": detections,
-    }
+    finally:
+        if results is not None:
+            del results
+        gc.collect(0)
