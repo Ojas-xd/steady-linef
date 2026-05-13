@@ -1,4 +1,4 @@
-import axios from "axios";
+import axios, { AxiosHeaders } from "axios";
 import type { Token, IssueCategory } from "./mockData";
 import { generateTokens, forecastData, hourlyDistribution, weeklyTrend } from "./mockData";
 
@@ -15,6 +15,17 @@ api.interceptors.request.use((config) => {
   const token = localStorage.getItem("auth_token");
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
+  }
+  // Default instance header is application/json — that breaks multipart uploads
+  // (browser must set Content-Type with boundary). Without this, /crowd/analyze fails.
+  if (config.data instanceof FormData) {
+    const h = config.headers;
+    if (h instanceof AxiosHeaders) {
+      h.delete("Content-Type");
+    } else if (h && typeof h === "object") {
+      delete (h as Record<string, unknown>)["Content-Type"];
+      delete (h as Record<string, unknown>)["content-type"];
+    }
   }
   return config;
 });
@@ -306,39 +317,54 @@ export const crowdApi = {
 
   /** Upload a frame for YOLO analysis */
   analyzeFrame: async (imageFile: File): Promise<{ count: number; image?: string; detections?: Array<{ box: number[]; confidence: number }> }> => {
+    const formData = new FormData();
+    formData.append("file", imageFile);
+
+    // Use fetch here (jugaad): axios instance defaults to Content-Type: application/json,
+    // which can break multipart uploads in production; fetch leaves the boundary to the browser.
+    const token = localStorage.getItem("auth_token");
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    let res: Response;
     try {
-      const formData = new FormData();
-      formData.append("file", imageFile);
-
-      // For FormData, browser sets Content-Type automatically with multipart boundary
-      // We must not set any Content-Type header for file uploads
-      const res = await api.post("/crowd/analyze", formData);
-
-      console.log("[YOLO] Analysis success:", res.data);
-      return res.data;
-    } catch (err: any) {
-      console.error("[YOLO] Analysis failed:", err);
-
-      // Extract detailed error message from response
-      if (err.response) {
-        const status = err.response.status;
-        const detail = err.response.data?.detail || err.response.data?.message || JSON.stringify(err.response.data);
-
-        if (status === 422) {
-          throw new Error(`Validation error: ${detail}`);
-        } else if (status === 500) {
-          throw new Error(`Server error: ${detail}`);
-        } else if (status === 503) {
-          throw new Error(`YOLO model not loaded: ${detail}`);
-        } else {
-          throw new Error(`API error ${status}: ${detail}`);
-        }
-      } else if (err.request) {
-        throw new Error("No response from server. Check if backend is running.");
-      } else {
-        throw new Error(err.message || "Request failed");
-      }
+      res = await fetch(`${API_BASE}/api/crowd/analyze`, {
+        method: "POST",
+        body: formData,
+        headers,
+      });
+    } catch {
+      throw new Error("No response from server. Check if backend is running.");
     }
+
+    let data: { detail?: unknown; message?: unknown; count?: number; image?: string; detections?: Array<{ box: number[]; confidence: number }> } = {};
+    try {
+      data = await res.json();
+    } catch {
+      /* non-JSON body */
+    }
+
+    const detailStr = (() => {
+      const d = data.detail ?? data.message;
+      if (typeof d === "string") return d;
+      if (d != null) return JSON.stringify(d);
+      return JSON.stringify(data);
+    })();
+
+    if (!res.ok) {
+      console.error("[YOLO] Analysis failed:", res.status, detailStr);
+      if (res.status === 422) throw new Error(`Validation error: ${detailStr}`);
+      if (res.status === 500) throw new Error(`Server error: ${detailStr}`);
+      if (res.status === 503) throw new Error(`YOLO model not loaded: ${detailStr}`);
+      throw new Error(`API error ${res.status}: ${detailStr}`);
+    }
+
+    console.log("[YOLO] Analysis success:", data);
+    return {
+      count: data.count ?? 0,
+      image: data.image,
+      detections: data.detections,
+    };
   },
 };
 

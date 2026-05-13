@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     def _validate_cors_origins(cls, v):
         return _parse_cors_origins(v)
 
+    @field_validator("YOLO_MODEL_PATH", mode="after")
+    @classmethod
+    def _resolve_yolo_model_path(cls, v: str) -> str:
+        # Render (and other hosts) may start the process with a cwd that is not `backend/`.
+        # If YOLO_MODEL_PATH is relative (e.g. `yolov8n.pt`), anchor it to the backend package dir.
+        p = Path(v)
+        if not p.is_absolute():
+            p = _BACKEND_DIR / p
+        return str(p)
+
     class Config:
         env_file = ".env"
 

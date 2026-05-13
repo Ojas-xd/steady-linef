@@ -45,11 +45,11 @@ def _get_model():
                 logger.error(f"[YOLO] Model load failed: {load_err}")
                 raise
             
-            # Warm up model with dummy inference
+            # Warm up model with dummy inference (BGR — same as OpenCV / predict path)
             try:
                 dummy = np.zeros((640, 480, 3), dtype=np.uint8)
                 logger.info(f"[YOLO] Running warmup inference...")
-                _model.predict(dummy, verbose=False, conf=0.25)
+                _model.predict(dummy, verbose=False, conf=0.25, device="cpu")
                 logger.info(f"[YOLO] Warmup complete. Model ready!")
             except Exception as warmup_err:
                 logger.error(f"[YOLO] Warmup failed: {warmup_err}")
@@ -139,16 +139,16 @@ async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_
 
     try:
         model = _get_model()
-        logger.info(f"Running YOLO inference on frame shape: {frame.shape}")
+        logger.info(f"Running YOLO inference on frame shape: {frame_bgr.shape} (BGR)")
         
-        # Use predict with explicit confidence threshold and classes (0 = person)
+        # Ultralytics expects BGR numpy arrays when using the OpenCV path; frame is RGB from PIL.
         results = model.predict(
-            frame, 
-            verbose=False, 
-            conf=0.25,  # Confidence threshold 25%
-            iou=0.45,   # NMS IoU threshold
-            classes=[0],  # Only detect class 0 (person)
-            device='cpu'  # Force CPU to avoid GPU issues
+            frame_bgr,
+            verbose=False,
+            conf=0.25,
+            iou=0.45,
+            classes=[0],  # COCO class 0 = person
+            device="cpu",
         )
         logger.info(f"YOLO inference completed, processing {len(results)} result(s)")
     except HTTPException:
