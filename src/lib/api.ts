@@ -324,6 +324,7 @@ export const crowdApi = {
     image?: string;
     detections?: Array<{ box: number[]; confidence: number }>;
     queue_zone_applied?: boolean;
+    total_persons_frame?: number | null;
   }> => {
     const formData = new FormData();
     formData.append("file", imageFile);
@@ -358,6 +359,7 @@ export const crowdApi = {
       image?: string;
       detections?: Array<{ box: number[]; confidence: number }>;
       queue_zone_applied?: boolean;
+      total_persons_frame?: number | null;
     } = {};
     try {
       data = await res.json();
@@ -386,6 +388,7 @@ export const crowdApi = {
       image: data.image,
       detections: data.detections,
       queue_zone_applied: data.queue_zone_applied,
+      total_persons_frame: data.total_persons_frame,
     };
   },
 };

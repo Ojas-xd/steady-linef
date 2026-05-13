@@ -43,6 +43,7 @@ const CameraPage = () => {
   const [zoneDragStart, setZoneDragStart] = useState<{ nx: number; ny: number } | null>(null);
   const [zoneDragCurrent, setZoneDragCurrent] = useState<{ nx: number; ny: number } | null>(null);
   const [queueZoneAppliedLast, setQueueZoneAppliedLast] = useState(false);
+  const [framePersonTotal, setFramePersonTotal] = useState<number | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const analysisTimerRef = useRef<number | null>(null);
@@ -132,6 +133,9 @@ const CameraPage = () => {
       setAnnotatedImage(result.image || null);
       setDetections(result.detections || []);
       setQueueZoneAppliedLast(Boolean(result.queue_zone_applied));
+      setFramePersonTotal(
+        typeof result.total_persons_frame === "number" ? result.total_persons_frame : null
+      );
       setCameraError(null);
     } catch (error) {
       console.error("YOLO analysis failed", error);
@@ -481,9 +485,14 @@ const CameraPage = () => {
             <p className="text-6xl font-black text-primary">{analysisCount ?? "--"}</p>
             <p className="text-sm text-muted-foreground mt-3">
               {queueZoneAppliedLast
-                ? "People inside your drawn queue zone (detection box center must be inside the zone)."
+                ? "People inside your drawn queue zone (box center must be inside the zone)."
                 : "Detections across the full frame (draw a queue zone on live camera to count only that area)."}
             </p>
+            {queueZoneAppliedLast && framePersonTotal !== null && (
+              <p className="text-xs text-muted-foreground mt-2">
+                Full frame detections: {framePersonTotal} — displayed count is in-zone only.
+              </p>
+            )}
           </div>
 
           {/* Detection Details */}
