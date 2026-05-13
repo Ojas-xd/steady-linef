@@ -10,11 +10,34 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AI Queue Management System", version="1.0.0")
 
+
+def _cors_allowlist() -> tuple[list[str], bool]:
+    """Starlette forbids allow_origins=['*'] with allow_credentials=True. Render env often
+    lists only one origin and misses Netlify — merge known frontends."""
+    raw = [o.rstrip("/") for o in settings.CORS_ORIGINS if o and str(o).strip()]
+    if len(raw) == 1 and raw[0] == "*":
+        return ["*"], False
+
+    merged: list[str] = []
+    seen: set[str] = set()
+    for o in raw + [
+        "https://steady-line.netlify.app",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]:
+        if o not in seen:
+            seen.add(o)
+            merged.append(o)
+    return merged, True
+
+
+_cors_origins, _cors_credentials = _cors_allowlist()
+
 # CORS - configured for production deployment
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_credentials,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["Content-Length", "Content-Type"],
