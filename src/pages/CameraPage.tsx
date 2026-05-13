@@ -82,6 +82,7 @@ const CameraPage = () => {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
+      setShowAnnotated(false);
       setCameraError(null);
       setCameraActive(true);
     } catch (error) {
@@ -90,20 +91,58 @@ const CameraPage = () => {
     }
   };
 
+  /** Wait until the browser exposes non-zero video dimensions (avoids "frame not ready" on first ticks). */
+  const waitForVideoDimensions = (video: HTMLVideoElement, maxMs = 5000): Promise<boolean> => {
+    const ready = () =>
+      video.videoWidth > 0 &&
+      video.videoHeight > 0 &&
+      video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+
+    if (ready()) return Promise.resolve(true);
+
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const finish = (ok: boolean) => {
+        video.removeEventListener("loadeddata", onEvt);
+        video.removeEventListener("loadedmetadata", onEvt);
+        video.removeEventListener("canplay", onEvt);
+        window.clearInterval(iv);
+        resolve(ok);
+      };
+      const onEvt = () => {
+        if (ready()) finish(true);
+      };
+      video.addEventListener("loadeddata", onEvt);
+      video.addEventListener("loadedmetadata", onEvt);
+      video.addEventListener("canplay", onEvt);
+      const iv = window.setInterval(() => {
+        if (ready()) finish(true);
+        else if (Date.now() - start > maxMs) finish(false);
+      }, 50);
+    });
+  };
+
   const captureFrame = async (): Promise<Blob | null> => {
     const video = videoRef.current;
-    if (!video || video.readyState < 2) return null;
+    if (!video || !cameraActive) return null;
+
+    const dimsOk = await waitForVideoDimensions(video);
+    if (!dimsOk || !video.videoWidth || !video.videoHeight) return null;
 
     const canvas = document.createElement("canvas");
-    const originalWidth = video.videoWidth || 640;
-    const originalHeight = video.videoHeight || 480;
+    const originalWidth = video.videoWidth;
+    const originalHeight = video.videoHeight;
     const maxWidth = 960;
     const scale = originalWidth > maxWidth ? maxWidth / originalWidth : 1;
     canvas.width = Math.round(originalWidth * scale);
     canvas.height = Math.round(originalHeight * scale);
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    try {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    } catch {
+      return null;
+    }
 
     return await new Promise((resolve) => {
       canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.8);
@@ -122,7 +161,7 @@ const CameraPage = () => {
     setIsAnalyzing(true);
     try {
       const blob = await captureFrame();
-      if (!blob) throw new Error("Camera frame is not ready.");
+      if (!blob) throw new Error("Camera frame is not ready. Switch to Live Camera view or wait a second after starting the camera.");
       const file = new File([blob], "frame.jpg", { type: "image/jpeg" });
       const roi =
         roiNorm && roiNorm.w > 0.03 && roiNorm.h > 0.03
@@ -295,48 +334,49 @@ const CameraPage = () => {
           )}
 
           <div className="rounded-[2rem] overflow-hidden border border-border/70 bg-black/5 mb-4 relative h-[420px] w-full">
-            {annotatedImage && showAnnotated ? (
+            {cameraActive && (
+              <video
+                ref={videoRef}
+                className={`absolute inset-0 z-0 h-full w-full object-contain bg-black pointer-events-none ${
+                  annotatedImage && showAnnotated ? "opacity-0" : "opacity-100"
+                }`}
+                muted
+                playsInline
+              />
+            )}
+            {annotatedImage && showAnnotated && (
               <img
                 src={annotatedImage}
                 alt="YOLO detections"
-                className="w-full h-full object-contain bg-black"
+                className="relative z-20 h-full w-full object-contain bg-black"
               />
-            ) : (
-              <>
-                <video
-                  ref={videoRef}
-                  className="w-full h-full object-contain bg-black pointer-events-none"
-                  muted
-                  playsInline
-                />
-                {cameraActive && !showAnnotated && (
+            )}
+            {cameraActive && !(annotatedImage && showAnnotated) && (
+              <div
+                className={`absolute inset-0 z-10 ${queueZoneDraw ? "cursor-crosshair touch-none" : "pointer-events-none"}`}
+                onMouseDown={queueZoneDraw ? onZonePointerDown : undefined}
+                onMouseMove={queueZoneDraw ? onZonePointerMove : undefined}
+                onMouseUp={queueZoneDraw ? finishZoneDrag : undefined}
+                onMouseLeave={queueZoneDraw ? finishZoneDrag : undefined}
+              >
+                {queueZoneDraw && previewRect() && (
                   <div
-                    className={`absolute inset-0 z-10 ${queueZoneDraw ? "cursor-crosshair touch-none" : "pointer-events-none"}`}
-                    onMouseDown={queueZoneDraw ? onZonePointerDown : undefined}
-                    onMouseMove={queueZoneDraw ? onZonePointerMove : undefined}
-                    onMouseUp={queueZoneDraw ? finishZoneDrag : undefined}
-                    onMouseLeave={queueZoneDraw ? finishZoneDrag : undefined}
-                  >
-                    {queueZoneDraw && previewRect() && (
-                      <div
-                        className="absolute border-2 border-amber-400/90 bg-amber-400/15 pointer-events-none"
-                        style={{
-                          left: `${previewRect()!.left}%`,
-                          top: `${previewRect()!.top}%`,
-                          width: `${previewRect()!.width}%`,
-                          height: `${previewRect()!.height}%`,
-                        }}
-                      />
-                    )}
-                    {roiOverlayStyle() && !zoneDragStart && (
-                      <div
-                        className="absolute border-2 border-cyan-400/90 bg-cyan-400/10 pointer-events-none"
-                        style={roiOverlayStyle()!}
-                      />
-                    )}
-                  </div>
+                    className="absolute border-2 border-amber-400/90 bg-amber-400/15 pointer-events-none"
+                    style={{
+                      left: `${previewRect()!.left}%`,
+                      top: `${previewRect()!.top}%`,
+                      width: `${previewRect()!.width}%`,
+                      height: `${previewRect()!.height}%`,
+                    }}
+                  />
                 )}
-              </>
+                {roiOverlayStyle() && !zoneDragStart && (
+                  <div
+                    className="absolute border-2 border-cyan-400/90 bg-cyan-400/10 pointer-events-none"
+                    style={roiOverlayStyle()!}
+                  />
+                )}
+              </div>
             )}
             {!cameraActive && !annotatedImage && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/40 text-center px-6">
