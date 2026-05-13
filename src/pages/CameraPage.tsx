@@ -12,7 +12,12 @@ const CameraPage = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [autoAnalyzeEnabled, setAutoAnalyzeEnabled] = useState(true);
   const [showAnnotated, setShowAnnotated] = useState(true);
-  const [healthStatus, setHealthStatus] = useState<{status: string; model_loaded?: boolean; error?: string} | null>(null);
+  const [healthStatus, setHealthStatus] = useState<{
+    status: string;
+    model_loaded?: boolean;
+    error?: string;
+    message?: string;
+  } | null>(null);
   const [isCheckingHealth, setIsCheckingHealth] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -216,12 +221,20 @@ const CameraPage = () => {
               <Activity className="w-4 h-4 text-muted-foreground" />
               <span className="text-sm text-muted-foreground">YOLO Model</span>
               {healthStatus && (
-                <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
-                  healthStatus.model_loaded 
-                    ? "bg-accent/20 text-accent" 
-                    : "bg-destructive/20 text-destructive"
-                }`}>
-                  {healthStatus.model_loaded ? "Ready" : "Not Ready"}
+                <span
+                  className={`text-xs font-semibold px-2 py-0.5 rounded ${
+                    healthStatus.model_loaded
+                      ? "bg-accent/20 text-accent"
+                      : healthStatus.status === "pending"
+                        ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
+                        : "bg-destructive/20 text-destructive"
+                  }`}
+                >
+                  {healthStatus.model_loaded
+                    ? "Ready"
+                    : healthStatus.status === "pending"
+                      ? "Loading…"
+                      : "Not Ready"}
                 </span>
               )}
             </div>
@@ -233,6 +246,12 @@ const CameraPage = () => {
               {isCheckingHealth ? "Checking..." : "Check Health"}
             </button>
           </div>
+
+          {healthStatus?.message && healthStatus.status === "pending" && (
+            <div className="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3">
+              <p className="text-xs text-amber-800 dark:text-amber-200 font-medium">{healthStatus.message}</p>
+            </div>
+          )}
 
           {healthStatus?.error && (
             <div className="mb-4 rounded-xl border border-destructive/20 bg-destructive/10 p-3">

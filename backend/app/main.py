@@ -1,3 +1,14 @@
+import os
+
+# Before heavy imports: less RAM / faster first paint on small hosts (Render)
+os.environ.setdefault("MPLBACKEND", "Agg")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -8,7 +19,15 @@ from app.routers import auth, tokens, dashboard, display, analytics, crowd
 # Create tables
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="AI Queue Management System", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Load YOLO off the request path so /health + /analyze don't race two downloads (OOM → no CORS headers).
+    crowd.start_background_yolo_warm()
+    yield
+
+
+app = FastAPI(title="AI Queue Management System", version="1.0.0", lifespan=lifespan)
 
 
 def _cors_allowlist() -> tuple[list[str], bool]:
@@ -33,15 +52,24 @@ def _cors_allowlist() -> tuple[list[str], bool]:
 
 _cors_origins, _cors_credentials = _cors_allowlist()
 
+# Netlify production + deploy previews (regex); skip when using wildcard origins
+_NETLIFY_ORIGIN_REGEX = r"https://([a-zA-Z0-9-]+--)?steady-line\.netlify\.app"
+
+_cors_kw: dict = {
+    "allow_origins": _cors_origins,
+    "allow_credentials": _cors_credentials,
+    "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "allow_headers": ["*"],
+    "expose_headers": ["Content-Length", "Content-Type"],
+    "max_age": 600,
+}
+if _cors_origins != ["*"]:
+    _cors_kw["allow_origin_regex"] = _NETLIFY_ORIGIN_REGEX
+
 # CORS - configured for production deployment
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_credentials=_cors_credentials,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["Content-Length", "Content-Type"],
-    max_age=600,  # Cache preflight requests for 10 minutes
+    **_cors_kw,
 )
 
 # Mount routers under /api
