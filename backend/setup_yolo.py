@@ -25,6 +25,30 @@ def _log(tag: str, msg: str) -> None:
     print(f"{colours.get(tag, '')}[{tag}]\033[0m {msg}", flush=True)
 
 
+def _force_legacy_onnx_exporter() -> None:
+    """
+    Monkey-patch torch.onnx.export so ultralytics always uses the legacy
+    TorchScript-based exporter (dynamo=False).  PyTorch 2.6+ defaults to
+    the new dynamo exporter which generates ONNX IR v13 — incompatible with
+    onnxruntime <= 1.20.x (max IR v10).
+    """
+    try:
+        import torch
+        if getattr(torch.onnx, "_legacy_patched", False):
+            return
+        _orig = torch.onnx.export
+
+        def _patched(*args, **kwargs):
+            kwargs.setdefault("dynamo", False)
+            return _orig(*args, **kwargs)
+
+        torch.onnx.export = _patched
+        torch.onnx._legacy_patched = True
+        _log("INFO", "Patched torch.onnx.export → legacy exporter (dynamo=False)")
+    except Exception as exc:
+        _log("WARN", f"Could not patch torch.onnx.export: {exc}")
+
+
 def export_onnx() -> bool:
     """Use ultralytics (build-time only) to produce yolov8n.onnx."""
     if ONNX_PATH.exists() and ONNX_PATH.stat().st_size > 5_000_000:
@@ -38,6 +62,9 @@ def export_onnx() -> bool:
         _log("ERR", "  pip install ultralytics==8.2.100 && python setup_yolo.py")
         return False
 
+    # Force legacy ONNX exporter BEFORE loading the model
+    _force_legacy_onnx_exporter()
+
     # Download .pt if needed (ultralytics handles this automatically)
     _log("INFO", f"Loading YOLOv8n weights (downloads if missing)…")
     t0 = time.time()
@@ -48,8 +75,8 @@ def export_onnx() -> bool:
         return False
     _log("INFO", f"Weights loaded in {time.time()-t0:.1f}s")
 
-    # Export to ONNX
-    _log("INFO", f"Exporting to ONNX (imgsz={EXPORT_IMGSZ})…")
+    # Export to ONNX (legacy exporter → IR v7-9 → onnxruntime compatible)
+    _log("INFO", f"Exporting to ONNX (imgsz={EXPORT_IMGSZ}, opset=17, legacy exporter)…")
     t0 = time.time()
     try:
         export_result = model.export(
