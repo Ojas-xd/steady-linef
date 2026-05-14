@@ -26,6 +26,8 @@ const CameraPage = () => {
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [analysisCount, setAnalysisCount] = useState<number | null>(null);
+  const [congestionLevel, setCongestionLevel] = useState<"LOW" | "MEDIUM" | "HIGH" | null>(null);
+  const [inferenceBackend, setInferenceBackend] = useState<string | null>(null);
   const [annotatedImage, setAnnotatedImage] = useState<string | null>(null);
   const [detections, setDetections] = useState<Array<{ box: number[]; confidence: number }>>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -211,6 +213,8 @@ const CameraPage = () => {
       setFramePersonTotal(
         typeof result.total_persons_frame === "number" ? result.total_persons_frame : null
       );
+      setCongestionLevel((result.congestion_level as "LOW" | "MEDIUM" | "HIGH") || null);
+      setInferenceBackend(result.inference_backend || null);
       setCameraError(null);
     } catch (error) {
       console.error("YOLO analysis failed", error);
@@ -559,6 +563,24 @@ const CameraPage = () => {
           <div className="rounded-[2rem] border border-border/70 bg-background p-6 text-center">
             <p className="text-sm text-muted-foreground uppercase tracking-[0.24em] mb-3">People Count</p>
             <p className="text-6xl font-black text-primary">{analysisCount ?? "--"}</p>
+            {congestionLevel && (
+              <div className="mt-4 flex justify-center">
+                <span
+                  className={`inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-bold tracking-widest uppercase ${
+                    congestionLevel === "HIGH"
+                      ? "bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/30"
+                      : congestionLevel === "MEDIUM"
+                        ? "bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30"
+                        : "bg-green-500/15 text-green-700 dark:text-green-400 border border-green-500/30"
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${
+                    congestionLevel === "HIGH" ? "bg-red-500" : congestionLevel === "MEDIUM" ? "bg-amber-500" : "bg-green-500"
+                  }`} />
+                  {congestionLevel} Congestion
+                </span>
+              </div>
+            )}
             <p className="text-sm text-muted-foreground mt-3">
               {queueZoneAppliedLast
                 ? "People inside your drawn queue zone (box center must be inside the zone)."
@@ -568,6 +590,9 @@ const CameraPage = () => {
               <p className="text-xs text-muted-foreground mt-2">
                 Full frame detections: {framePersonTotal} — displayed count is in-zone only.
               </p>
+            )}
+            {inferenceBackend && (
+              <p className="text-xs text-muted-foreground/50 mt-3">backend: {inferenceBackend}</p>
             )}
           </div>
 

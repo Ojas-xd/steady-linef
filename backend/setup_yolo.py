@@ -1,220 +1,127 @@
 #!/usr/bin/env python3
 """
-Setup script for YOLO model - Run this before starting the server.
-Ensures model is downloaded and verified.
+BUILD-TIME setup script.
+Downloads YOLOv8n.pt via ultralytics, exports to yolov8n.onnx, then deletes the .pt.
+At runtime the app only uses onnxruntime (no torch / ultralytics needed → fits in 512 MB).
+
+Render build command:
+    pip install -r requirements.txt && pip install ultralytics==8.2.100 && python setup_yolo.py
 """
 import os
 import sys
 import time
 from pathlib import Path
-from urllib.request import urlopen
-from urllib.error import URLError
 
-# Colors for terminal output
-GREEN = "\033[92m"
-RED = "\033[91m"
-YELLOW = "\033[93m"
-BLUE = "\033[94m"
-RESET = "\033[0m"
+os.environ.setdefault("YOLO_VERBOSE", "False")
 
-MODEL_URL = "https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8n.pt"
-MODEL_NAME = "yolov8n.pt"
+BACKEND_DIR = Path(__file__).resolve().parent
+PT_PATH = BACKEND_DIR / "yolov8n.pt"
+ONNX_PATH = BACKEND_DIR / "yolov8n.onnx"
+EXPORT_IMGSZ = 640
 
-def log_info(msg: str):
-    print(f"{BLUE}[INFO]{RESET} {msg}")
 
-def log_success(msg: str):
-    print(f"{GREEN}[SUCCESS]{RESET} {msg}")
+def _log(tag: str, msg: str) -> None:
+    colours = {"INFO": "\033[94m", "OK": "\033[92m", "WARN": "\033[93m", "ERR": "\033[91m"}
+    print(f"{colours.get(tag, '')}[{tag}]\033[0m {msg}", flush=True)
 
-def log_error(msg: str):
-    print(f"{RED}[ERROR]{RESET} {msg}")
 
-def log_warn(msg: str):
-    print(f"{YELLOW}[WARN]{RESET} {msg}")
-
-def get_backend_dir() -> Path:
-    """Get the backend directory."""
-    return Path(__file__).resolve().parent
-
-def download_model() -> bool:
-    """Download the YOLOv8n model."""
-    backend_dir = get_backend_dir()
-    model_path = backend_dir / MODEL_NAME
-
-    if model_path.exists():
-        size = model_path.stat().st_size
-        size_mb = size / 1024 / 1024
-        if size > 5_000_000:  # At least 5MB
-            log_success(f"Model already exists: {model_path} ({size_mb:.1f} MB)")
-            return True
-        else:
-            log_warn(f"Model file too small ({size} bytes), re-downloading...")
-            model_path.unlink()
-
-    log_info(f"Downloading YOLOv8n model from GitHub...")
-    log_info(f"URL: {MODEL_URL}")
-    log_info(f"Destination: {model_path}")
-
-    try:
-        req = urlopen(MODEL_URL, timeout=120)
-        total_size = int(req.headers.get('Content-Length', 0))
-
-        if total_size > 0:
-            log_info(f"Expected size: {total_size / 1024 / 1024:.1f} MB")
-
-        downloaded = 0
-        chunk_size = 8192
-        last_pct = -10
-
-        with open(model_path, 'wb') as f:
-            while True:
-                chunk = req.read(chunk_size)
-                if not chunk:
-                    break
-                f.write(chunk)
-                downloaded += len(chunk)
-
-                if total_size > 0:
-                    pct = int((downloaded / total_size) * 100)
-                    if pct >= last_pct + 10:
-                        bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
-                        print(f"\r  Progress: [{bar}] {pct}% ({downloaded/1024/1024:.1f} MB)", end="", flush=True)
-                        last_pct = pct
-
-        print()  # New line after progress
-
-        # Verify download
-        final_size = model_path.stat().st_size
-        if final_size < 5_000_000:
-            log_error(f"Downloaded file too small ({final_size} bytes), may be corrupted")
-            model_path.unlink()
-            return False
-
-        log_success(f"Model downloaded successfully: {final_size / 1024 / 1024:.1f} MB")
+def export_onnx() -> bool:
+    """Use ultralytics (build-time only) to produce yolov8n.onnx."""
+    if ONNX_PATH.exists() and ONNX_PATH.stat().st_size > 5_000_000:
+        _log("OK", f"ONNX model already exists ({ONNX_PATH.stat().st_size // 1024 // 1024} MB) — skipping export.")
         return True
 
-    except URLError as e:
-        log_error(f"Network error: {e}")
-        return False
-    except KeyboardInterrupt:
-        log_warn("Download interrupted by user")
-        if model_path.exists():
-            model_path.unlink()
-        return False
-    except Exception as e:
-        log_error(f"Download failed: {e}")
-        if model_path.exists():
-            model_path.unlink()
-        return False
-
-def verify_model() -> bool:
-    """Verify the model can be loaded."""
-    backend_dir = get_backend_dir()
-    model_path = backend_dir / MODEL_NAME
-
-    if not model_path.exists():
-        log_error("Model file not found")
-        return False
-
-    log_info("Verifying model can be loaded...")
-
     try:
-        # Suppress ultralytics output
-        os.environ["YOLO_VERBOSE"] = "False"
-
         from ultralytics import YOLO
-        import torch
+    except ImportError:
+        _log("ERR", "ultralytics not installed. Add it to the build command:")
+        _log("ERR", "  pip install ultralytics==8.2.100 && python setup_yolo.py")
+        return False
+
+    # Download .pt if needed (ultralytics handles this automatically)
+    _log("INFO", f"Loading YOLOv8n weights (downloads if missing)…")
+    t0 = time.time()
+    try:
+        model = YOLO("yolov8n.pt")
+    except Exception as exc:
+        _log("ERR", f"Failed to load/download yolov8n.pt: {exc}")
+        return False
+    _log("INFO", f"Weights loaded in {time.time()-t0:.1f}s")
+
+    # Export to ONNX
+    _log("INFO", f"Exporting to ONNX (imgsz={EXPORT_IMGSZ})…")
+    t0 = time.time()
+    try:
+        export_result = model.export(
+            format="onnx",
+            imgsz=EXPORT_IMGSZ,
+            simplify=True,
+            opset=12,
+            dynamic=False,
+        )
+        exported = Path(str(export_result))
+    except Exception as exc:
+        _log("ERR", f"Export failed: {exc}")
+        return False
+
+    # ultralytics saves next to the .pt — move to backend dir if needed
+    if exported.resolve() != ONNX_PATH.resolve():
+        exported.rename(ONNX_PATH)
+
+    if not ONNX_PATH.exists() or ONNX_PATH.stat().st_size < 1_000_000:
+        _log("ERR", "ONNX file missing or too small after export.")
+        return False
+
+    size_mb = ONNX_PATH.stat().st_size / 1024 / 1024
+    _log("OK", f"ONNX exported in {time.time()-t0:.1f}s → {ONNX_PATH} ({size_mb:.1f} MB)")
+
+    # Remove .pt to save disk space on Render
+    for pt in BACKEND_DIR.glob("*.pt"):
+        pt.unlink()
+        _log("INFO", f"Deleted {pt.name} (not needed at runtime)")
+
+    return True
+
+
+def verify_onnx() -> bool:
+    """Quick smoke-test of the exported ONNX model with onnxruntime."""
+    try:
+        import onnxruntime as ort
         import numpy as np
-
-        # Load model
-        start = time.time()
-        model = YOLO(str(model_path))
-        load_time = time.time() - start
-
-        # Warmup inference
-        log_info("Running warmup inference...")
-        dummy = np.zeros((320, 320, 3), dtype=np.uint8)
-
-        torch.set_num_threads(1)
-        with torch.inference_mode():
-            results = model.predict(dummy, verbose=False, conf=0.25, device="cpu", imgsz=320)
-
-        log_success(f"Model verified! Load time: {load_time:.2f}s")
-
-        # Check classes
-        if hasattr(model, "names"):
-            names = list(model.names.values())
-            log_info(f"Available classes: {names[:10]}..." if len(names) > 10 else f"Available classes: {names}")
-            if "person" in names:
-                log_success("Person class is available!")
-            else:
-                log_warn("Person class not found in model!")
-
+    except ImportError:
+        _log("WARN", "onnxruntime not installed yet — skipping smoke test.")
         return True
 
-    except ImportError as e:
-        log_error(f"Required package not installed: {e}")
-        log_info("Run: pip install ultralytics torch opencv-python numpy")
+    try:
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 1
+        sess = ort.InferenceSession(str(ONNX_PATH), sess_options=opts, providers=["CPUExecutionProvider"])
+        dummy = np.zeros((1, 3, EXPORT_IMGSZ, EXPORT_IMGSZ), dtype=np.float32)
+        input_name = sess.get_inputs()[0].name
+        out = sess.run(None, {input_name: dummy})
+        _log("OK", f"ONNX smoke-test passed. Output shape: {out[0].shape}")
+        return True
+    except Exception as exc:
+        _log("ERR", f"ONNX smoke-test failed: {exc}")
         return False
-    except Exception as e:
-        log_error(f"Model verification failed: {e}")
-        return False
 
-def check_dependencies() -> bool:
-    """Check if required dependencies are installed."""
-    log_info("Checking dependencies...")
 
-    required = [
-        ("ultralytics", "ultralytics"),
-        ("torch", "torch"),
-        ("cv2", "opencv-python"),
-        ("numpy", "numpy"),
-        ("PIL", "pillow"),
-    ]
+def main() -> None:
+    print("\n" + "="*60)
+    print("YOLOv8 → ONNX export for Crowd Detection")
+    print("="*60 + "\n")
 
-    all_ok = True
-    for module, package in required:
-        try:
-            __import__(module)
-            log_success(f"  ✓ {package}")
-        except ImportError:
-            log_error(f"  ✗ {package} - NOT INSTALLED")
-            all_ok = False
-
-    if not all_ok:
-        log_info("\nInstall missing packages with:")
-        log_info("  pip install ultralytics torch opencv-python numpy pillow")
-
-    return all_ok
-
-def main():
-    print(f"\n{BLUE}{'='*60}{RESET}")
-    print(f"{BLUE}YOLOv8 Setup for Crowd Detection{RESET}")
-    print(f"{BLUE}{'='*60}{RESET}\n")
-
-    # Check dependencies first
-    if not check_dependencies():
-        log_error("Please install missing dependencies first")
+    if not export_onnx():
         sys.exit(1)
 
-    # Download model
-    if not download_model():
-        log_error("Failed to download model")
+    if not verify_onnx():
         sys.exit(1)
 
-    # Verify model
-    if not verify_model():
-        log_error("Model verification failed")
-        sys.exit(1)
+    print("\n" + "="*60)
+    print("Setup complete — yolov8n.onnx is ready.")
+    print("Runtime uses onnxruntime only (no torch, fits in 512 MB).")
+    print("="*60 + "\n")
 
-    print(f"\n{GREEN}{'='*60}{RESET}")
-    print(f"{GREEN}YOLO is ready for crowd detection!{RESET}")
-    print(f"{GREEN}{'='*60}{RESET}\n")
-
-    print("You can now:")
-    print("  1. Start the backend server: python -m uvicorn app.main:app --reload")
-    print("  2. Set YOLO_MODE=ultralytics in your .env file")
-    print("  3. Open the Camera page to test person detection")
 
 if __name__ == "__main__":
     main()

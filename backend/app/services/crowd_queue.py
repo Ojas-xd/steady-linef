@@ -300,6 +300,14 @@ def persist_crowd_count(db: Session, count: int) -> None:
     db.commit()
 
 
+def _congestion_level(count: int) -> str:
+    if count <= 5:
+        return "LOW"
+    if count <= 15:
+        return "MEDIUM"
+    return "HIGH"
+
+
 def analyze_frame_pipeline(
     *,
     contents: bytes,
@@ -336,12 +344,17 @@ def analyze_frame_pipeline(
     data_uri = encode_jpeg_data_uri(vis)
     persist_crowd_count(db, api_count)
 
+    health = get_detector_health()
+    backend = health.get("inference_backend", "opencv_hog")
+
     return {
         "count": api_count,
         "image": data_uri,
         "detections": [d.to_api_dict() for d in api_dets],
         "queue_zone_applied": roi_norm is not None,
         "total_persons_frame": total_frame,
+        "congestion_level": _congestion_level(api_count),
+        "inference_backend": backend,
     }
 
 

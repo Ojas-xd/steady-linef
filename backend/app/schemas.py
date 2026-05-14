@@ -131,5 +131,6 @@ class CrowdAnalyzeOut(BaseModel):
     image: str  # base64 encoded image
     detections: list[DetectionBox]
     queue_zone_applied: bool = False
-    # When queue_zone_applied: detections in full frame before ROI filter (for dashboard / debugging)
     total_persons_frame: Optional[int] = None
+    congestion_level: str = "LOW"   # LOW | MEDIUM | HIGH
+    inference_backend: str = "unknown"
