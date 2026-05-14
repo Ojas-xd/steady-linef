@@ -39,8 +39,11 @@ class Settings(BaseSettings):
     # Used for wait-time estimation. Set to total staffed counters in production.
     COUNTERS_COUNT: int = 1
 
-    # People counting: hog | ultralytics | demo (separate YOLO-only service can be added later via env if needed)
-    YOLO_MODE: str = "hog"
+    # People counting: hog | ultralytics | demo
+    # - "ultralytics": YOLOv8 (recommended, most accurate)
+    # - "hog": OpenCV HOG (fallback, no model needed)
+    # - "demo": Fake detections for testing
+    YOLO_MODE: str = "ultralytics"
 
     @field_validator("YOLO_MODE", mode="before")
     @classmethod
