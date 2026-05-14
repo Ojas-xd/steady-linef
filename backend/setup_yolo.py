@@ -1,23 +1,40 @@
 #!/usr/bin/env python3
 """
 BUILD-TIME setup script.
-Downloads YOLOv8n.pt via ultralytics, exports to yolov8n.onnx, then deletes the .pt.
-At runtime the app only uses onnxruntime (no torch / ultralytics needed → fits in 512 MB).
 
-Render build command:
-    pip install -r requirements.txt && pip install ultralytics==8.2.100 && python setup_yolo.py
+Strategy (fastest → slowest):
+  1. Download a pre-built YOLOv8n ONNX from Hugging Face (no torch needed,
+     avoids torch 2.7 dynamo-exporter / IR-v13 issue entirely).
+  2. If download fails → export from .pt using ultralytics with torch<2.6
+     (old exporter → IR v7 → onnxruntime compatible).
+
+Render build command (Strategy 1 — recommended):
+    pip install -r requirements.txt && python setup_yolo.py
+
+Render build command (Strategy 2 — if download fails):
+    pip install -r requirements.txt && pip install "torch<2.6" "ultralytics==8.2.100" && python setup_yolo.py
 """
 import os
 import sys
 import time
+import struct
 from pathlib import Path
+from urllib.request import urlopen, Request
+from urllib.error import URLError
 
 os.environ.setdefault("YOLO_VERBOSE", "False")
 
 BACKEND_DIR = Path(__file__).resolve().parent
-PT_PATH = BACKEND_DIR / "yolov8n.pt"
 ONNX_PATH = BACKEND_DIR / "yolov8n.onnx"
 EXPORT_IMGSZ = 640
+MIN_ONNX_BYTES = 5_000_000   # 5 MB sanity check
+
+# Pre-built YOLOv8n ONNX sources (IR v7–9, opset 17, onnxruntime-compatible)
+DOWNLOAD_URLS = [
+    "https://huggingface.co/Ultralytics/Assets/resolve/main/yolov8n.onnx",
+    "https://huggingface.co/ultralytics/assets/resolve/main/yolov8n.onnx",
+    "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx",
+]
 
 
 def _log(tag: str, msg: str) -> None:
@@ -25,128 +42,175 @@ def _log(tag: str, msg: str) -> None:
     print(f"{colours.get(tag, '')}[{tag}]\033[0m {msg}", flush=True)
 
 
-def _force_legacy_onnx_exporter() -> None:
-    """
-    Monkey-patch torch.onnx.export so ultralytics always uses the legacy
-    TorchScript-based exporter (dynamo=False).  PyTorch 2.6+ defaults to
-    the new dynamo exporter which generates ONNX IR v13 — incompatible with
-    onnxruntime <= 1.20.x (max IR v10).
-    """
+def _onnx_ir_version(path: Path) -> int | None:
+    """Read the ONNX IR version from the protobuf header without loading full model."""
     try:
-        import torch
-        if getattr(torch.onnx, "_legacy_patched", False):
-            return
-        _orig = torch.onnx.export
+        with open(path, "rb") as f:
+            data = f.read(64)
+        # ONNX ModelProto: field 1 = ir_version (int64), field 8 = model_version
+        # Protobuf wire: tag=(field<<3|type), varint
+        i = 0
+        while i < len(data):
+            tag_byte = data[i]; i += 1
+            field_num = tag_byte >> 3
+            wire_type = tag_byte & 0x07
+            if wire_type == 0:   # varint
+                val = 0; shift = 0
+                while True:
+                    b = data[i]; i += 1
+                    val |= (b & 0x7F) << shift
+                    shift += 7
+                    if not (b & 0x80):
+                        break
+                if field_num == 1:   # ir_version
+                    return val
+            else:
+                break
+    except Exception:
+        pass
+    return None
 
-        def _patched(*args, **kwargs):
-            kwargs.setdefault("dynamo", False)
-            return _orig(*args, **kwargs)
 
-        torch.onnx.export = _patched
-        torch.onnx._legacy_patched = True
-        _log("INFO", "Patched torch.onnx.export → legacy exporter (dynamo=False)")
-    except Exception as exc:
-        _log("WARN", f"Could not patch torch.onnx.export: {exc}")
+def _download_onnx() -> bool:
+    """Try each URL in DOWNLOAD_URLS; return True on first success."""
+    for url in DOWNLOAD_URLS:
+        _log("INFO", f"Trying: {url}")
+        try:
+            req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urlopen(req, timeout=120) as resp:
+                total = int(resp.headers.get("Content-Length", 0))
+                downloaded = 0
+                tmp = ONNX_PATH.with_suffix(".tmp")
+                with open(tmp, "wb") as f:
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                if downloaded < MIN_ONNX_BYTES:
+                    tmp.unlink(missing_ok=True)
+                    _log("WARN", f"Downloaded only {downloaded} bytes — skipping.")
+                    continue
+                tmp.rename(ONNX_PATH)
+                size_mb = ONNX_PATH.stat().st_size / 1024 / 1024
+                _log("OK", f"Downloaded {size_mb:.1f} MB from {url}")
+                return True
+        except Exception as exc:
+            _log("WARN", f"Download failed ({exc}), trying next URL…")
+    return False
 
 
-def export_onnx() -> bool:
-    """Use ultralytics (build-time only) to produce yolov8n.onnx."""
-    if ONNX_PATH.exists() and ONNX_PATH.stat().st_size > 5_000_000:
-        _log("OK", f"ONNX model already exists ({ONNX_PATH.stat().st_size // 1024 // 1024} MB) — skipping export.")
-        return True
-
+def _export_onnx() -> bool:
+    """
+    Export from .pt using ultralytics.
+    REQUIRES torch<2.6 in build to use old ONNX exporter → IR v7 (not IR v13).
+    """
     try:
         from ultralytics import YOLO
     except ImportError:
-        _log("ERR", "ultralytics not installed. Add it to the build command:")
-        _log("ERR", "  pip install ultralytics==8.2.100 && python setup_yolo.py")
+        _log("ERR", "ultralytics not installed. Use build command with 'torch<2.6 ultralytics==8.2.100'")
         return False
 
-    # Force legacy ONNX exporter BEFORE loading the model
-    _force_legacy_onnx_exporter()
-
-    # Download .pt if needed (ultralytics handles this automatically)
-    _log("INFO", f"Loading YOLOv8n weights (downloads if missing)…")
+    _log("INFO", "Loading YOLOv8n weights (downloads if missing)…")
     t0 = time.time()
     try:
         model = YOLO("yolov8n.pt")
     except Exception as exc:
-        _log("ERR", f"Failed to load/download yolov8n.pt: {exc}")
+        _log("ERR", f"Failed to load yolov8n.pt: {exc}")
         return False
-    _log("INFO", f"Weights loaded in {time.time()-t0:.1f}s")
+    _log("INFO", f"Weights ready in {time.time()-t0:.1f}s")
 
-    # Export to ONNX (legacy exporter → IR v7-9 → onnxruntime compatible)
-    _log("INFO", f"Exporting to ONNX (imgsz={EXPORT_IMGSZ}, opset=17, legacy exporter)…")
+    _log("INFO", f"Exporting to ONNX (imgsz={EXPORT_IMGSZ})…")
     t0 = time.time()
     try:
-        export_result = model.export(
-            format="onnx",
-            imgsz=EXPORT_IMGSZ,
-            simplify=True,
-            opset=17,
-            dynamic=False,
-        )
-        exported = Path(str(export_result))
+        result = model.export(format="onnx", imgsz=EXPORT_IMGSZ, simplify=True,
+                              opset=17, dynamic=False)
+        exported = Path(str(result))
+        if exported.resolve() != ONNX_PATH.resolve():
+            exported.rename(ONNX_PATH)
     except Exception as exc:
         _log("ERR", f"Export failed: {exc}")
         return False
 
-    # ultralytics saves next to the .pt — move to backend dir if needed
-    if exported.resolve() != ONNX_PATH.resolve():
-        exported.rename(ONNX_PATH)
+    for pt in BACKEND_DIR.glob("*.pt"):
+        pt.unlink()
+        _log("INFO", f"Deleted {pt.name}")
 
-    if not ONNX_PATH.exists() or ONNX_PATH.stat().st_size < 1_000_000:
+    if not ONNX_PATH.exists() or ONNX_PATH.stat().st_size < MIN_ONNX_BYTES:
         _log("ERR", "ONNX file missing or too small after export.")
         return False
 
     size_mb = ONNX_PATH.stat().st_size / 1024 / 1024
-    _log("OK", f"ONNX exported in {time.time()-t0:.1f}s → {ONNX_PATH} ({size_mb:.1f} MB)")
-
-    # Remove .pt to save disk space on Render
-    for pt in BACKEND_DIR.glob("*.pt"):
-        pt.unlink()
-        _log("INFO", f"Deleted {pt.name} (not needed at runtime)")
-
+    _log("OK", f"Exported in {time.time()-t0:.1f}s → {ONNX_PATH} ({size_mb:.1f} MB)")
     return True
 
 
+def get_or_build_onnx() -> bool:
+    """Get the ONNX model: skip if exists, otherwise download then export."""
+    if ONNX_PATH.exists() and ONNX_PATH.stat().st_size > MIN_ONNX_BYTES:
+        _log("OK", f"ONNX already present ({ONNX_PATH.stat().st_size // 1024 // 1024} MB) — skip.")
+        return True
+
+    _log("INFO", "Step 1: Download pre-built ONNX (avoids torch dynamo IR-v13 issue)…")
+    if _download_onnx():
+        return True
+
+    _log("WARN", "All downloads failed. Step 2: Exporting from .pt…")
+    _log("WARN", "NOTE: Requires torch<2.6 in build command or export will produce IR v13!")
+    return _export_onnx()
+
+
 def verify_onnx() -> bool:
-    """Quick smoke-test of the exported ONNX model with onnxruntime."""
+    """Smoke-test with onnxruntime + check IR version."""
+    ir = _onnx_ir_version(ONNX_PATH)
+    if ir is not None:
+        if ir > 10:
+            _log("ERR", f"ONNX IR version {ir} > 10 — onnxruntime 1.19.x cannot load this.")
+            _log("ERR", "Fix: use build command with 'torch<2.6 ultralytics==8.2.100' to regenerate.")
+            ONNX_PATH.unlink(missing_ok=True)
+            return False
+        _log("INFO", f"ONNX IR version: {ir} (compatible ✓)")
+
     try:
         import onnxruntime as ort
         import numpy as np
     except ImportError:
-        _log("WARN", "onnxruntime not installed yet — skipping smoke test.")
+        _log("WARN", "onnxruntime not installed — skipping smoke test.")
         return True
 
     try:
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = 1
-        sess = ort.InferenceSession(str(ONNX_PATH), sess_options=opts, providers=["CPUExecutionProvider"])
+        sess = ort.InferenceSession(str(ONNX_PATH), sess_options=opts,
+                                    providers=["CPUExecutionProvider"])
         dummy = np.zeros((1, 3, EXPORT_IMGSZ, EXPORT_IMGSZ), dtype=np.float32)
-        input_name = sess.get_inputs()[0].name
-        out = sess.run(None, {input_name: dummy})
-        _log("OK", f"ONNX smoke-test passed. Output shape: {out[0].shape}")
+        name = sess.get_inputs()[0].name
+        out = sess.run(None, {name: dummy})
+        _log("OK", f"Smoke-test passed. Output shape: {out[0].shape}")
         return True
     except Exception as exc:
-        _log("ERR", f"ONNX smoke-test failed: {exc}")
+        _log("ERR", f"Smoke-test failed: {exc}")
+        ONNX_PATH.unlink(missing_ok=True)
         return False
 
 
 def main() -> None:
     print("\n" + "="*60)
-    print("YOLOv8 → ONNX export for Crowd Detection")
+    print("YOLOv8n ONNX setup for Crowd Detection")
     print("="*60 + "\n")
 
-    if not export_onnx():
+    if not get_or_build_onnx():
+        _log("ERR", "Could not obtain ONNX model. Try build command:")
+        _log("ERR", '  pip install -r requirements.txt && pip install "torch<2.6" ultralytics==8.2.100 && python setup_yolo.py')
         sys.exit(1)
 
     if not verify_onnx():
+        _log("ERR", "Verification failed. Regenerate with: pip install 'torch<2.6' ultralytics==8.2.100 && python setup_yolo.py")
         sys.exit(1)
 
     print("\n" + "="*60)
-    print("Setup complete — yolov8n.onnx is ready.")
-    print("Runtime uses onnxruntime only (no torch, fits in 512 MB).")
+    print("Setup complete — yolov8n.onnx ready (onnxruntime, no torch at runtime).")
     print("="*60 + "\n")
 
 
