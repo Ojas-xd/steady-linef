@@ -56,7 +56,7 @@ def export_onnx() -> bool:
             format="onnx",
             imgsz=EXPORT_IMGSZ,
             simplify=True,
-            opset=12,
+            opset=17,
             dynamic=False,
         )
         exported = Path(str(export_result))
